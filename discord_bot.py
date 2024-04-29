@@ -14,9 +14,9 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 recruit_status = False
 roles = [
-    {"name": "참여", "color": discord.Color.default()},
+    {"name": "함", "color": discord.Color.default()},
     {"name": "하면함", "color": discord.Color.default()},
-    {"name": "불참", "color": discord.Color.default()}
+    {"name": "안함", "color": discord.Color.default()}
 ]
 dos_count = {}
 origin_message = ''
@@ -39,7 +39,7 @@ async def end_recruitment(ctx):
     await ctx.send("모집이 종료되었습니다.")
 
 @bot.command(name='모집')
-async def recruit(ctx, game_name, num_players: int, deadline, meetup_time):
+async def recruit(ctx, game_name, num_players: int, deadline="?", meetup_time="?"):
     global origin_message
     global recruit_status
     global game_player
@@ -52,7 +52,8 @@ async def recruit(ctx, game_name, num_players: int, deadline, meetup_time):
     origin_message = (
             f"{ctx.guild.default_role.mention}\n"
             f"{ctx.author.mention}님이 "
-            f"{game_name} 모집을 시작합니다!\n\n"
+            f"모집을 시작합니다!\n\n"
+            f"**게임명:** {game_name}\n"
             f"**인원 수:** {num_players}\n"
             f"**마감 시간:** {deadline}\n"
             f"**모임 시간:** {meetup_time}\n\n"
@@ -70,6 +71,54 @@ async def recruit(ctx, game_name, num_players: int, deadline, meetup_time):
     recruit_status = True
     bot_message_id = msg.id
 
+@bot.command(name='모임')
+async def meetup(ctx):
+    global roles
+    global bot_message_id
+    if not recruit_status:
+        await ctx.send("모집이 시작되지 않았습니다.")
+        return
+    message = await ctx.channel.fetch_message(int(bot_message_id))
+    target_role = [discord.utils.get(ctx.guild.roles, name=role["name"]) for role in roles]
+    #타겟 역할 멤버 닉네임 목록
+    members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
+    members_role_2 = [member.mention for member in target_role[1].members] if target_role[1].members else []
+    await ctx.send(f"{target_role[0].mention} : {', '.join(members_role_1)}\n{target_role[1].mention} : {', '.join(members_role_2)}\n모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
+    print('모집 완료')
+
+@bot.command(name='재전송')
+#원래 메시지를 삭제하고 다시 생성
+async def resend(ctx):
+    global origin_message
+    global bot_message_id
+    global roles
+    global game_player
+    global dos_count
+    message = await ctx.channel.fetch_message(int(bot_message_id))
+    await message.delete()
+    msg = await ctx.send(origin_message)
+    hmh_emoji = discord.utils.get(ctx.guild.emojis, name="hmh")
+    if hmh_emoji:
+        await msg.add_reaction("✅")
+        await msg.add_reaction(hmh_emoji)
+        await msg.add_reaction("❌")
+    else:
+        await msg.add_reaction("✅")
+        await msg.add_reaction("❌")
+    bot_message_id = msg.id
+    edit_message = await modify_msg_form(roles, msg)
+    print(edit_message)
+    await msg.edit(content=f"{origin_message}{edit_message}")
+
+@bot.command(name='명령어')
+async def help(ctx):
+    await ctx.send(
+        "!모집 [게임명] [인원수] \{마감시간\} \{모임시간\} : 모집을 시작합니다.\n"
+        "!모집종료 : 모집을 종료합니다.\n"
+        "!명령어 : 도움말을 출력합니다.\n"
+        "!모임 : 모집이 완료된 경우 모임을 시작합니다.(멤버 멘션)\n"
+        "!재전송 : 모집 메시지를 재전송합니다.\n"
+    )
 @bot.event
 async def on_raw_reaction_add(payload):
     global origin_message
@@ -82,9 +131,10 @@ async def on_raw_reaction_add(payload):
         member = message.guild.get_member(payload.user_id)
         #장난치는놈 경고
         dos_count[payload.user_id] = dos_count.get(payload.user_id, 0) + 1
-        if dos_count[payload.user_id] > 8:
+        if dos_count[payload.user_id] > 5:
             mention = f'<@{payload.user_id}>'
             await member.send(f'{mention} 고만해라')
+            dos_count[payload.user_id] = 0
             return
         hmh_emoji = discord.utils.get(message.guild.emojis, name="hmh")
         #타겟 멤버 역할 초기화
@@ -116,8 +166,7 @@ async def on_raw_reaction_add(payload):
         if join_count >= game_player:
             members_role_1 = [member.display_name for member in target_role[0].members] if target_role[0].members else []
             members_role_2 = [member.display_name for member in target_role[1].members] if target_role[1].members else []
-            join_list = ', '.join(members_role_1 + members_role_2)
-            await channel.send(f"{target_role[0].mention} {target_role[1].mention} 모집이 완료되었습니다.\n 멤버: {join_list}\n !모집종료 명령어로 모집을 종료하세요.")
+            await channel.send(f"{target_role[0].mention} : {', '.join(members_role_1)}\n{target_role[1].mention} : {', '.join(members_role_2)}\n모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
             print('모집 완료')
 
 @bot.event
@@ -140,6 +189,7 @@ async def on_raw_reaction_remove(payload):
             role = discord.utils.get(message.guild.roles, name=roles[2]["name"])
             await member.remove_roles(role)
             print(f'{member.display_name}님이 모집 불참을 취소하셨습니다.')
+        await asyncio.sleep(0.5)
         edit_message = await modify_msg_form(roles, message)
         await message.edit(content=f"{origin_message}{edit_message}")
 
@@ -158,6 +208,7 @@ async def on_guild_join(guild):
 
 @bot.event
 async def on_ready():
+    await bot.change_presence(activity=discord.Game(name="!명령어"))
     print('Bot is ready')
 
 bot.run(Token)
