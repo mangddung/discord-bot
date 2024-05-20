@@ -29,6 +29,13 @@ dos_count = {}
 origin_message = ''
 game_player = 0
 bot_message_id = ''
+recruit_user = ''
+warning_message = {
+    3: "그만해라",
+    6: "야야",
+    10: "야이 시발련아",
+    15: "차단해버린다",
+}
 
 @bot.command(name='모집종료')
 async def end_recruitment(ctx):
@@ -36,6 +43,10 @@ async def end_recruitment(ctx):
     global bot_message_id
     global game_player
     global dos_count
+    user = ctx.author
+    if user != recruit_user and not ctx.author.guild_permissions.administrator:
+        await ctx.send("모집자만 종료할 수 있습니다.")
+        return
     await reset_roles(roles, ctx)
     message = await ctx.channel.fetch_message(int(bot_message_id))
     await message.delete()
@@ -51,13 +62,19 @@ async def recruit(ctx, game_name, num_players: int, deadline="?", meetup_time="?
     global recruit_status
     global game_player
     global bot_message_id
+    global recruit_user
     game_player = num_players
+    recruit_user = ctx.author
     if recruit_status:
         await ctx.send("이미 모집이 시작되었습니다. 이전 모집을 종료하고 다시 시도해주세요: !모집종료")
         return
-
+    role = discord.utils.get(ctx.guild.roles, name='온라인')
+    if role:
+        mention = role.mention
+    else:
+        mention = ctx.guild.default_role.mention
     origin_message = (
-            f"{ctx.guild.default_role.mention}\n"
+            f"{mention}\n"
             f"{ctx.author.mention}님이 "
             f"모집을 시작합니다!\n\n"
             f"**게임명:** {game_name}\n"
@@ -138,16 +155,15 @@ async def on_raw_reaction_add(payload):
         return
     channel = bot.get_channel(payload.channel_id)
     message = await channel.fetch_message(payload.message_id)
-
     if message.author == bot.user:
         member = message.guild.get_member(payload.user_id)
         #장난치는놈 경고
         dos_count[payload.user_id] = dos_count.get(payload.user_id, 0) + 1
-        if dos_count[payload.user_id] > 5:
-            mention = f'<@{payload.user_id}>'
-            await member.send(f'{mention} 고만해라')
-            dos_count[payload.user_id] = 0
-            return
+        #경고 메시지 warning_message에 있는 횟수만큼 경고 메시지 출력
+        if dos_count[payload.user_id] in warning_message:
+            await message.channel.send(f"{member.mention} {warning_message[dos_count[payload.user_id]]}")
+            if dos_count[payload.user_id] >= max(warning_message.keys()):
+                dos_count[payload.user_id] = 0
         hmh_emoji = discord.utils.get(message.guild.emojis, name="hmh")
         #타겟 멤버 역할 초기화
         for role_data in roles:
@@ -170,12 +186,14 @@ async def on_raw_reaction_add(payload):
             role = discord.utils.get(message.guild.roles, name=roles[2]["name"])
             await member.add_roles(role)
             print(f'{member.display_name}님이 모집에 불참을 선택하셨습니다.')
+        else:
+            await remove_reaction(message, member, str(payload.emoji), '')
         await asyncio.sleep(0.5)
         edit_message = await modify_msg_form(roles, message)
         await message.edit(content=f"{origin_message}{edit_message}")
         target_role = [discord.utils.get(message.guild.roles, name=role["name"]) for role in roles]
         join_count = len(target_role[0].members) + len(target_role[1].members)
-        if join_count >= game_player:
+        if join_count == game_player:
             hmh_emoji = discord.utils.get(ctx.guild.emojis, name="hmh")
             members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
             if hmh_emoji:
@@ -183,7 +201,7 @@ async def on_raw_reaction_add(payload):
                 temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n{target_role[1].mention} : {', '.join(members_role_2)}\n"
             else:
                 temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
-            await ctx.send(f"{temp}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
+            await channel.send(f"{temp}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
             print('모집 완료')
 
 @bot.event
@@ -224,17 +242,6 @@ async def on_guild_join(guild):
             await guild.create_role(name=role_name, color=color)
             print(f"역할 '{role_name}'이 생성되었습니다.")
 
-#서버에서 나가면 역할 삭제
-@bot.event
-async def on_guild_remove(guild):
-    role_list = roles + voice_kick_roles
-    for role_data in role_list:
-        role_name = role_data["name"]
-        role = discord.utils.get(guild.roles, name=role_name)
-        if role:
-            await role.delete()
-            print(f"역할 '{role_name}'이 삭제되었습니다.")
-
 #집중모드 역할을 가진 유저가 음성채널에 들어오면 추방
 #주말 및 공휴일은 제외
 #18시 이전에만 추방
@@ -249,14 +256,17 @@ async def on_voice_state_update(member, before, after):
         current_hour = datetime.now().hour
         check_holiday = is_holiday(current_time)
         today_day = datetime.today().weekday()
-        if today_day == 5 or today_day == 6 or check_holiday:
+        if today_day == 5 or today_day == 6 or check_holiday: #주말, 공휴일
             print('주말 및 공휴일')
         elif '집중모드' in role_names and 18>current_hour:
+            await member.move_to(None)
+        if '음성차단' in role_names:
             await member.move_to(None)
             print('집중모드로 인한 음성채널 추방')
 
 #역할생성 명령어
 @bot.command(name='역할생성')
+@commands.has_permissions(administrator=True)
 async def create_role(ctx):
     role_list = roles + voice_kick_roles
     fail_list = []
@@ -279,6 +289,7 @@ async def create_role(ctx):
 
 #역할삭제 명령어
 @bot.command(name='역할삭제')
+@commands.has_permissions(administrator=True)
 async def delete_role(ctx):
     role_list = roles + voice_kick_roles
     fail_list = []
