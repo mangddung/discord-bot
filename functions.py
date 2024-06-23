@@ -2,16 +2,15 @@ import discord
 
 async def modify_msg_form(roles, message):  
     role_name = [role["name"] for role in roles]
-    edit_message = ''
+    edit_message = '\n'
     for name in role_name:
         role = discord.utils.get(message.guild.roles, name=name)
         member_count = len(role.members)
         member_list = ", ".join([member.display_name for member in role.members])
         if member_list == '':
-            member_list = ''
+            edit_message += ''
         else:
-            member_list = f'```{member_list}```'
-        edit_message += f"\n**{name} ({member_count}명)**\n{member_list}"
+            edit_message += f"\n**{name} ({member_count}명)**\n```{member_list}```"
     return edit_message
 
 async def reset_roles(roles, ctx):
