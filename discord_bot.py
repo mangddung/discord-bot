@@ -60,7 +60,7 @@ class MyModal(Modal):
         global meetup_time
         global deadline
         game_name = self.game_name_input.value
-        recruit_number = self.recruit_number_input.value
+        recruit_number = int(self.recruit_number_input.value)
         meetup_time = f'**모임 시간:** {self.meetup_time_input.value}\n' if self.meetup_time_input.value else ''
         deadline = f'**마감 시간:** {self.deadline_input.value}\n' if self.deadline_input.value else ''
         #입력 버튼 삭제
@@ -168,7 +168,7 @@ async def resend(ctx):
 @bot.command(name='명령어')
 async def help(ctx):
     await ctx.send(
-        "!모집 [게임명] [인원수] \{마감시간\} \{모임시간\} : 모집을 시작합니다.\n"
+        "!모집 : 모집 양식을 입력할 수 있는 버튼 메시지를 보냅니다.\n"
         "!모집종료 : 모집을 종료합니다.\n"
         "!명령어 : 도움말을 출력합니다.\n"
         "!모임 : 모집이 완료된 경우 모임을 시작합니다.(멤버 멘션)\n"
@@ -222,11 +222,19 @@ async def on_raw_reaction_add(payload):
         if join_count == recruit_number:
             hmh_emoji = discord.utils.get(channel.guild.emojis, name="hmh")
             members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
+            if members_role_1 == []:
+                role1 = ''
+            else:
+                role1 = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
             if hmh_emoji:
                 members_role_2 = [member.mention for member in target_role[1].members] if target_role[1].members else []
-                temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n{target_role[1].mention} : {', '.join(members_role_2)}\n"
+                if members_role_2 == []:
+                    role2 = ''
+                else:
+                    role2 = f"{target_role[1].mention} : {', '.join(members_role_2)}\n"
+                temp = f"{role1}{role2}"
             else:
-                temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
+                temp = f"{role1}"
             await channel.send(f"{temp}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
             print('모집 완료')
 
