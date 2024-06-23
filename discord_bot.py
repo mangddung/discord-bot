@@ -5,7 +5,7 @@ from discord.ext import commands
 from functions import modify_msg_form, reset_roles, remove_reaction
 from datetime import datetime, timedelta
 from holidayskr import is_holiday
-
+from discord.ui import Modal, TextInput, View, Button
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -14,12 +14,12 @@ intents.reactions = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
-
+        
 recruit_status = False
 roles = [
-    {"name": "함", "color": discord.Color.default()},
-    {"name": "하면함", "color": discord.Color.default()},
-    {"name": "안함", "color": discord.Color.default()},
+    {"name": "함", "color": discord.Color.default(), "emoji": "✅"},
+    {"name": "하면함", "color": discord.Color.default(), "emoji": "hmh"},
+    {"name": "안함", "color": discord.Color.default(), "emoji": "❌"},
 ]
 voice_kick_roles = [
     {"name": "집중모드", "color": discord.Color.default()},
@@ -27,15 +27,70 @@ voice_kick_roles = [
 ]
 dos_count = {}
 origin_message = ''
-game_player = 0
 bot_message_id = ''
 recruit_user = ''
+game_name = ''
+recruit_number = 0
+meetup_time = ''
+deadline = ''
 warning_message = {
-    3: "그만해라",
-    6: "야야",
-    10: "야이 시발련아",
-    15: "차단해버린다",
+    6: "그만눌러라",
+    10: "야야",
+    15: "야이 시발련아",
 }
+
+class MyModal(Modal):
+    def __init__(self, original_interaction: discord.Interaction):
+        super().__init__(title="모집 입력 양식")
+        self.original_interaction = original_interaction
+        self.game_name_input = TextInput(label="게임 이름", placeholder="게임 이름 입력")
+        self.add_item(self.game_name_input)
+        self.recruit_number_input = TextInput(label="모집 인원", placeholder="숫자 입력", style=discord.TextStyle.short)
+        self.add_item(self.recruit_number_input)
+        self.meetup_time_input = TextInput(label="모임 시간(선택)", placeholder="모임 시간 입력", required=False,style=discord.TextStyle.short)
+        self.add_item(self.meetup_time_input)
+        self.deadline_input = TextInput(label="마감 시간(선택)", placeholder="마감 시간 입력", required=False, style=discord.TextStyle.short)
+        self.add_item(self.deadline_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        global bot_message_id
+        global origin_message
+        global game_name
+        global recruit_number
+        global meetup_time
+        global deadline
+        game_name = self.game_name_input.value
+        recruit_number = self.recruit_number_input.value
+        meetup_time = f'**모임 시간:** {self.meetup_time_input.value}\n' if self.meetup_time_input.value else ''
+        deadline = f'**마감 시간:** {self.deadline_input.value}\n' if self.deadline_input.value else ''
+        #입력 버튼 삭제
+        await self.original_interaction.message.delete()
+        #모집한 사람한테 메시지 보내기
+        await interaction.response.send_message("모집이 시작되었습니다!", ephemeral=True)
+        #모집 메시지 생성
+        role = discord.utils.get(self.original_interaction.guild.roles, name='온라인')
+        mention = role.mention if role else self.original_interaction.guild.default_role.mention
+        origin_message = (
+            f"{mention}\n"
+            f"{self.original_interaction.user.mention}님이 "
+            f"모집을 시작합니다!\n\n"
+            f"**게임명:** {game_name}\n"
+            f"**인원 수:** {recruit_number}\n"
+            f"{meetup_time}"
+            f"{deadline}\n"
+            f"참여를 원하시면 반응 이모지를 눌러주세요!"
+        )
+        message = await interaction.channel.send(f"{origin_message}")
+        bot_message_id = message.id
+        await message.add_reaction("✅")
+        await message.add_reaction("❌")
+
+
+class MyView(View):
+    @discord.ui.button(label="입력", style=discord.ButtonStyle.primary)
+    async def open_modal(self, interaction: discord.Interaction, button: Button):
+        modal = MyModal(interaction)
+        await interaction.response.send_modal(modal)
 
 @bot.command(name='모집종료')
 async def end_recruitment(ctx):
@@ -57,43 +112,14 @@ async def end_recruitment(ctx):
     await ctx.send("모집이 종료되었습니다.")
 
 @bot.command(name='모집')
-async def recruit(ctx, game_name, num_players: int, deadline="?", meetup_time="?"):
-    global origin_message
+async def recruit(ctx):
     global recruit_status
-    global game_player
-    global bot_message_id
-    global recruit_user
-    game_player = num_players
-    recruit_user = ctx.author
     if recruit_status:
         await ctx.send("이미 모집이 시작되었습니다. 이전 모집을 종료하고 다시 시도해주세요: !모집종료")
         return
-    role = discord.utils.get(ctx.guild.roles, name='온라인')
-    if role:
-        mention = role.mention
-    else:
-        mention = ctx.guild.default_role.mention
-    origin_message = (
-            f"{mention}\n"
-            f"{ctx.author.mention}님이 "
-            f"모집을 시작합니다!\n\n"
-            f"**게임명:** {game_name}\n"
-            f"**인원 수:** {num_players}\n"
-            f"**마감 시간:** {deadline}\n"
-            f"**모임 시간:** {meetup_time}\n\n"
-            f"참여를 원하시면 반응 이모지를 눌러주세요!"
-        )
-    hmh_emoji = discord.utils.get(ctx.guild.emojis, name="hmh")
-    msg = await ctx.send(origin_message)
-    if hmh_emoji:
-        await msg.add_reaction("✅")
-        await msg.add_reaction(hmh_emoji)
-        await msg.add_reaction("❌")
-    else:
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
+    view = MyView()
+    await ctx.send("버튼을 눌러 양식을 입력해주세요.", view=view)
     recruit_status = True
-    bot_message_id = msg.id
 
 @bot.command(name='모임')
 async def meetup(ctx):
@@ -193,8 +219,8 @@ async def on_raw_reaction_add(payload):
         await message.edit(content=f"{origin_message}{edit_message}")
         target_role = [discord.utils.get(message.guild.roles, name=role["name"]) for role in roles]
         join_count = len(target_role[0].members) + len(target_role[1].members)
-        if join_count == game_player:
-            hmh_emoji = discord.utils.get(ctx.guild.emojis, name="hmh")
+        if join_count == recruit_number:
+            hmh_emoji = discord.utils.get(channel.guild.emojis, name="hmh")
             members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
             if hmh_emoji:
                 members_role_2 = [member.mention for member in target_role[1].members] if target_role[1].members else []
