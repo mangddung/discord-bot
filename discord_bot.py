@@ -6,6 +6,8 @@ from functions import modify_msg_form, reset_roles, remove_reaction
 from datetime import datetime, timedelta
 from holidayskr import is_holiday
 from discord.ui import Modal, TextInput, View, Button
+import sqlite3
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -14,7 +16,20 @@ intents.reactions = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
-        
+
+conn = sqlite3.connect('recruit_bot.db')
+cursor = conn.cursor()
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS channel_access (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL,
+    access_channel_id INTEGER NOT NULL,
+    access_message_id INTEGER NOT NULL,
+    target_channel_id INTEGER NOT NULL
+)
+''')
+conn.commit()
+
 recruit_status = False
 roles = [
     {"name": "참여", "color": discord.Color.default(), "emoji": "✅"},
@@ -26,7 +41,7 @@ voice_kick_roles = [
 ]
 dos_count = {}
 origin_message = ''
-bot_message_id = ''
+recruit_message_id = ''
 recruit_user = ''
 game_name = ''
 recruit_number = 0
@@ -52,7 +67,7 @@ class MyModal(Modal):
         self.add_item(self.deadline_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        global bot_message_id
+        global recruit_message_id
         global origin_message
         global game_name
         global recruit_number
@@ -80,7 +95,7 @@ class MyModal(Modal):
             f"참여를 원하시면 반응 이모지를 눌러주세요!"
         )
         message = await interaction.channel.send(f"{origin_message}")
-        bot_message_id = message.id
+        recruit_message_id = message.id
         await message.add_reaction("✅")
         await message.add_reaction("❌")
 
@@ -94,7 +109,7 @@ class MyView(View):
 @bot.command(name='모집종료')
 async def end_recruitment(ctx):
     global recruit_status
-    global bot_message_id
+    global recruit_message_id
     global game_player
     global dos_count
     user = ctx.author
@@ -102,10 +117,10 @@ async def end_recruitment(ctx):
         await ctx.send("모집자만 종료할 수 있습니다.")
         return
     await reset_roles(roles, ctx)
-    message = await ctx.channel.fetch_message(int(bot_message_id))
+    message = await ctx.channel.fetch_message(int(recruit_message_id))
     await message.delete()
     recruit_status = False
-    bot_message_id = ''
+    recruit_message_id = ''
     game_player = 0
     dos_count = {}
     await ctx.send("모집이 종료되었습니다.")
@@ -123,11 +138,11 @@ async def recruit(ctx):
 @bot.command(name='모임')
 async def meetup(ctx):
     global roles
-    global bot_message_id
+    global recruit_message_id
     if not recruit_status:
         await ctx.send("모집이 시작되지 않았습니다.")
         return
-    message = await ctx.channel.fetch_message(int(bot_message_id))
+    message = await ctx.channel.fetch_message(int(recruit_message_id))
     target_role = [discord.utils.get(ctx.guild.roles, name=role["name"]) for role in roles]
     #타겟 역할 멤버 닉네임 목록
     members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
@@ -139,16 +154,16 @@ async def meetup(ctx):
 #원래 메시지를 삭제하고 다시 생성
 async def resend(ctx):
     global origin_message
-    global bot_message_id
+    global recruit_message_id
     global roles
     global game_player
     global dos_count
-    message = await ctx.channel.fetch_message(int(bot_message_id))
+    message = await ctx.channel.fetch_message(int(recruit_message_id))
     await message.delete()
     msg = await ctx.send(origin_message)
     await msg.add_reaction("✅")
     await msg.add_reaction("❌")
-    bot_message_id = msg.id
+    recruit_message_id = msg.id
     edit_message = await modify_msg_form(roles, msg)
     print(edit_message)
     await msg.edit(content=f"{origin_message}{edit_message}")
@@ -162,6 +177,7 @@ async def help(ctx):
         "!모임 : 모집이 완료된 경우 모임을 시작합니다.(멤버 멘션)\n"
         "!재전송 : 모집 메시지를 재전송합니다.\n"
     )
+
 @bot.event
 async def on_raw_reaction_add(payload):
     global origin_message
@@ -169,7 +185,8 @@ async def on_raw_reaction_add(payload):
         return
     channel = bot.get_channel(payload.channel_id)
     message = await channel.fetch_message(payload.message_id)
-    if message.author == bot.user:
+    #모집 메시지 확인
+    if message.id == recruit_message_id:
         member = message.guild.get_member(payload.user_id)
         #장난치는놈 경고
         dos_count[payload.user_id] = dos_count.get(payload.user_id, 0) + 1
@@ -209,13 +226,28 @@ async def on_raw_reaction_add(payload):
                 role1 = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
             await channel.send(f"{role1}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
             print('모집 완료')
+    #권한 부여 메시지
+    else:
+        if str(payload.emoji) == '✅':
+            #db에서 access channel, id 검색
+            cursor.execute('''
+            SELECT * FROM channel_access 
+            WHERE access_message_id = ? AND access_channel_id = ?
+            ''', (payload.message_id, payload.channel_id))
+            db = cursor.fetchone()
+            if db:
+                target_channel = bot.get_channel(int(db[4]))
+                member = message.guild.get_member(payload.user_id)
+                await target_channel.set_permissions(member, read_messages=True)
+                print(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 부여하셨습니다.')
 
 @bot.event
 async def on_raw_reaction_remove(payload):
     channel = bot.get_channel(payload.channel_id)
     message = await channel.fetch_message(payload.message_id)
     global origin_message
-    if message.author == bot.user:
+    #모집 메시지
+    if message.id == recruit_message_id:
         member = message.guild.get_member(payload.user_id)
         if str(payload.emoji) == '✅':
             role = discord.utils.get(message.guild.roles, name=roles[0]["name"])
@@ -228,6 +260,22 @@ async def on_raw_reaction_remove(payload):
         await asyncio.sleep(0.5)
         edit_message = await modify_msg_form(roles, message)
         await message.edit(content=f"{origin_message}{edit_message}")
+    #권한 부여 메시지
+    else:
+        if str(payload.emoji) == '✅':
+            #db에서 access channel, id 검색
+            cursor.execute('''
+            SELECT * FROM channel_access 
+            WHERE access_message_id = ? AND access_channel_id = ?
+            ''', (payload.message_id, payload.channel_id))
+            db = cursor.fetchone()
+            if db:
+                target_channel = bot.get_channel(int(db[4]))
+                member = message.guild.get_member(payload.user_id)
+                await target_channel.set_permissions(member, read_messages=False)
+                print(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 취소하셨습니다.')
+
+
 
 #서버에 들어오면 역할 생성
 @bot.event
@@ -265,6 +313,75 @@ async def on_voice_state_update(member, before, after):
             await member.move_to(None)
             print('집중모드로 인한 음성채널 추방')
 
+#================================================================================================
+#텍스트 채널 권한 부여 명령어
+#================================================================================================
+#권한 부여 채널 생성
+@bot.command(name='채널생성')
+@commands.has_permissions(administrator=True)
+async def create_access_channel(ctx, *, channel_name: str):
+    guild = ctx.guild
+    channel = await guild.create_text_channel(channel_name)
+    #비공개 채널 설정
+    await channel.set_permissions(guild.default_role, send_messages=False)
+    await ctx.send(f"채널 '{channel.name}'이 생성되었습니다.")
+
+#권한 부여 메시지 생성
+@bot.command(name='메시지생성')
+@commands.has_permissions(administrator=True)
+async def set_target_channel(ctx, target_channel: str):
+    #대상 채널이 존재하는지 확인
+    target_channel_id = ''
+    for channel in ctx.guild.channels:
+        if channel.name == target_channel:
+            target_channel_id = channel.id
+            break
+    if target_channel_id == '':
+        await ctx.send(f"채널 '{target_channel}'이 존재하지 않습니다.")
+    #존재하면 메시지 생성, 데이터베이스에 저장
+    else:
+        message = await ctx.send(f"__**{target_channel}**__ 채널 권한 부여를 위해 아래 이모지를 눌러주세요.")
+        await message.add_reaction("✅")
+        cursor.execute(f'''
+        INSERT INTO channel_access (server_id, access_channel_id, access_message_id, target_channel_id)
+        VALUES ('{ctx.guild.id}', '{ctx.channel.id}', '{message.id}', '{target_channel_id}')
+        ''')
+        conn.commit()
+        #명령어 메시지 삭제
+        await ctx.message.delete()
+
+#권한 부여 메시지 삭제
+@bot.command(name='메시지삭제')
+@commands.has_permissions(administrator=True)
+async def delete_target_channel(ctx, target_channel: str):
+    #대상 채널이 존재하는지 확인
+    target_channel_id = ''
+    for channel in ctx.guild.channels:
+        if channel.name == target_channel:
+            target_channel_id = channel.id
+            break
+    if target_channel_id == '':
+        await ctx.send(f"채널 '{target_channel}'이 존재하지 않습니다.")
+        return
+    #존재하면 메시지 삭제, 데이터베이스에서 삭제
+    cursor.execute('''
+    SELECT * FROM channel_access
+    WHERE access_channel_id = ? AND target_channel_id = ?
+    ''', (ctx.channel.id, target_channel_id))
+    db = cursor.fetchone()
+    if db:
+        print(db)
+        message = await ctx.channel.fetch_message(db[3])
+        await message.delete()
+        cursor.execute('''
+        DELETE FROM channel_access
+        WHERE access_message_id = ?
+        ''', (db[3],))
+        conn.commit()
+        #명령어 메시지 삭제
+        await ctx.message.delete()
+
+#================================================================================================
 #역할생성 명령어
 @bot.command(name='역할생성')
 @commands.has_permissions(administrator=True)
