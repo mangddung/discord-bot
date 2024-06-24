@@ -17,9 +17,8 @@ bot = commands.Bot(command_prefix='!', intents=intents)
         
 recruit_status = False
 roles = [
-    {"name": "함", "color": discord.Color.default(), "emoji": "✅"},
-    {"name": "하면함", "color": discord.Color.default(), "emoji": "hmh"},
-    {"name": "안함", "color": discord.Color.default(), "emoji": "❌"},
+    {"name": "참여", "color": discord.Color.default(), "emoji": "✅"},
+    {"name": "불참", "color": discord.Color.default(), "emoji": "❌"},
 ]
 voice_kick_roles = [
     {"name": "집중모드", "color": discord.Color.default()},
@@ -118,7 +117,7 @@ async def recruit(ctx):
         await ctx.send("이미 모집이 시작되었습니다. 이전 모집을 종료하고 다시 시도해주세요: !모집종료")
         return
     view = MyView()
-    await ctx.send("버튼을 눌러 양식을 입력해주세요.", view=view)
+    await ctx.send("버튼을 눌러 모집 양식을 입력해주세요.", view=view)
     recruit_status = True
 
 @bot.command(name='모임')
@@ -131,13 +130,8 @@ async def meetup(ctx):
     message = await ctx.channel.fetch_message(int(bot_message_id))
     target_role = [discord.utils.get(ctx.guild.roles, name=role["name"]) for role in roles]
     #타겟 역할 멤버 닉네임 목록
-    hmh_emoji = discord.utils.get(ctx.guild.emojis, name="hmh")
     members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
-    if hmh_emoji:
-        members_role_2 = [member.mention for member in target_role[1].members] if target_role[1].members else []
-        temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n{target_role[1].mention} : {', '.join(members_role_2)}\n"
-    else:
-        temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
+    temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
     await ctx.send(f"{temp}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
     print('모집 완료')
 
@@ -152,14 +146,8 @@ async def resend(ctx):
     message = await ctx.channel.fetch_message(int(bot_message_id))
     await message.delete()
     msg = await ctx.send(origin_message)
-    hmh_emoji = discord.utils.get(ctx.guild.emojis, name="hmh")
-    if hmh_emoji:
-        await msg.add_reaction("✅")
-        await msg.add_reaction(hmh_emoji)
-        await msg.add_reaction("❌")
-    else:
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
+    await msg.add_reaction("✅")
+    await msg.add_reaction("❌")
     bot_message_id = msg.id
     edit_message = await modify_msg_form(roles, msg)
     print(edit_message)
@@ -190,7 +178,6 @@ async def on_raw_reaction_add(payload):
             await message.channel.send(f"{member.mention} {warning_message[dos_count[payload.user_id]]}")
             if dos_count[payload.user_id] >= max(warning_message.keys()):
                 dos_count[payload.user_id] = 0
-        hmh_emoji = discord.utils.get(message.guild.emojis, name="hmh")
         #타겟 멤버 역할 초기화
         for role_data in roles:
             role_name = role_data["name"]
@@ -198,18 +185,13 @@ async def on_raw_reaction_add(payload):
             if member in role.members:
                 await member.remove_roles(role)
         if str(payload.emoji) == '✅':
-            await remove_reaction(message, member, hmh_emoji, '❌')
+            await remove_reaction(message, member, '❌')
             role = discord.utils.get(message.guild.roles, name=roles[0]["name"])
             await member.add_roles(role)
             print(f'{member.display_name}님이 모집에 참여를 선택하셨습니다.')
-        elif str(payload.emoji) == str(hmh_emoji):
-            await remove_reaction(message, member, '✅', '❌')
-            role = discord.utils.get(message.guild.roles, name=roles[1]["name"])
-            await member.add_roles(role)
-            print(f'{member.display_name}님이 hmh를 선택하셨습니다.')
         elif str(payload.emoji) == '❌':
-            await remove_reaction(message, member, '✅', hmh_emoji)
-            role = discord.utils.get(message.guild.roles, name=roles[2]["name"])
+            await remove_reaction(message, member, '✅')
+            role = discord.utils.get(message.guild.roles, name=roles[1]["name"])
             await member.add_roles(role)
             print(f'{member.display_name}님이 모집에 불참을 선택하셨습니다.')
         else:
@@ -218,24 +200,14 @@ async def on_raw_reaction_add(payload):
         edit_message = await modify_msg_form(roles, message)
         await message.edit(content=f"{origin_message}{edit_message}")
         target_role = [discord.utils.get(message.guild.roles, name=role["name"]) for role in roles]
-        join_count = len(target_role[0].members) + len(target_role[1].members)
+        join_count = len(target_role[0].members)
         if join_count == recruit_number:
-            hmh_emoji = discord.utils.get(channel.guild.emojis, name="hmh")
             members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
             if members_role_1 == []:
                 role1 = ''
             else:
                 role1 = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
-            if hmh_emoji:
-                members_role_2 = [member.mention for member in target_role[1].members] if target_role[1].members else []
-                if members_role_2 == []:
-                    role2 = ''
-                else:
-                    role2 = f"{target_role[1].mention} : {', '.join(members_role_2)}\n"
-                temp = f"{role1}{role2}"
-            else:
-                temp = f"{role1}"
-            await channel.send(f"{temp}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
+            await channel.send(f"{role1}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
             print('모집 완료')
 
 @bot.event
@@ -245,17 +217,12 @@ async def on_raw_reaction_remove(payload):
     global origin_message
     if message.author == bot.user:
         member = message.guild.get_member(payload.user_id)
-        hmh_emoji = discord.utils.get(message.guild.emojis, name="hmh")
         if str(payload.emoji) == '✅':
             role = discord.utils.get(message.guild.roles, name=roles[0]["name"])
             await member.remove_roles(role)
             print(f'{member.display_name}님이 모집 참여를 취소하셨습니다.')
-        elif str(payload.emoji) == str(hmh_emoji):
-            role = discord.utils.get(message.guild.roles, name=roles[1]["name"])
-            await member.remove_roles(role)
-            print(f'{member.display_name}님이 hmh 선택을 취소하셨습니다.')
         elif str(payload.emoji) == '❌':
-            role = discord.utils.get(message.guild.roles, name=roles[2]["name"])
+            role = discord.utils.get(message.guild.roles, name=roles[1]["name"])
             await member.remove_roles(role)
             print(f'{member.display_name}님이 모집 불참을 취소하셨습니다.')
         await asyncio.sleep(0.5)

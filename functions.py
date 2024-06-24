@@ -20,6 +20,5 @@ async def reset_roles(roles, ctx):
         for member in role.members:
             await member.remove_roles(role)
 
-async def remove_reaction(message,member, emoji1,emoji2):
-    await message.remove_reaction(emoji1, member)
-    await message.remove_reaction(emoji2, member)
+async def remove_reaction(message,member, emoji):
+    await message.remove_reaction(emoji, member)
