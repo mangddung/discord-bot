@@ -1,11 +1,12 @@
 from dico_token import Token
 import discord
 import asyncio
+import json
 from discord.ext import commands
 from functions import modify_msg_form, reset_roles, remove_reaction
 from datetime import datetime, timedelta
 from holidayskr import is_holiday
-from discord.ui import Modal, TextInput, View, Button
+from discord.ui import Modal, TextInput, View, Button, Select
 import sqlite3
 
 intents = discord.Intents.default()
@@ -44,7 +45,7 @@ origin_message = ''
 recruit_message_id = ''
 recruit_user = ''
 game_name = ''
-recruit_number = 0
+recruit_num = 0
 meetup_time = ''
 deadline = ''
 warning_message = {
@@ -52,15 +53,24 @@ warning_message = {
     10: "야야",
     15: "야이 시발련아",
 }
+def recruit_msg_form(mention, recruit_user, game_name, recruit_num, meetup_time, deadline):
+    temp = (
+        f"{mention}\n"
+        f"{recruit_user}님이 "
+        f"모집을 시작합니다!\n\n"
+        f"**게임명:** {game_name}\n"
+        f"**인원 수:** {recruit_num}\n"
+        f"{meetup_time}"
+        f"{deadline}\n"
+        f"참여를 원하시면 반응 이모지를 눌러주세요!"
+    )
+    return temp
 
 class MyModal(Modal):
-    def __init__(self, original_interaction: discord.Interaction):
+    def __init__(self, original_interaction: discord.Interaction, game_info: dict):
         super().__init__(title="모집 입력 양식")
         self.original_interaction = original_interaction
-        self.game_name_input = TextInput(label="게임 이름", placeholder="게임 이름 입력")
-        self.add_item(self.game_name_input)
-        self.recruit_number_input = TextInput(label="모집 인원", placeholder="숫자 입력", style=discord.TextStyle.short)
-        self.add_item(self.recruit_number_input)
+        self.game_info = game_info
         self.meetup_time_input = TextInput(label="모임 시간(선택)", placeholder="모임 시간 입력", required=False,style=discord.TextStyle.short)
         self.add_item(self.meetup_time_input)
         self.deadline_input = TextInput(label="마감 시간(선택)", placeholder="마감 시간 입력", required=False, style=discord.TextStyle.short)
@@ -70,11 +80,11 @@ class MyModal(Modal):
         global recruit_message_id
         global origin_message
         global game_name
-        global recruit_number
+        global recruit_num
         global meetup_time
         global deadline
-        game_name = self.game_name_input.value
-        recruit_number = int(self.recruit_number_input.value)
+        game_name = self.game_info["label"]
+        recruit_num = self.game_info["value"]
         meetup_time = f'**모임 시간:** {self.meetup_time_input.value}\n' if self.meetup_time_input.value else ''
         deadline = f'**마감 시간:** {self.deadline_input.value}\n' if self.deadline_input.value else ''
         #입력 버튼 삭제
@@ -84,26 +94,41 @@ class MyModal(Modal):
         #모집 메시지 생성
         role = discord.utils.get(self.original_interaction.guild.roles, name='온라인')
         mention = role.mention if role else self.original_interaction.guild.default_role.mention
-        origin_message = (
-            f"{mention}\n"
-            f"{self.original_interaction.user.mention}님이 "
-            f"모집을 시작합니다!\n\n"
-            f"**게임명:** {game_name}\n"
-            f"**인원 수:** {recruit_number}\n"
-            f"{meetup_time}"
-            f"{deadline}\n"
-            f"참여를 원하시면 반응 이모지를 눌러주세요!"
-        )
+        origin_message = recruit_msg_form(mention, self.original_interaction.user.mention, game_name, recruit_num, meetup_time, deadline)
         message = await interaction.channel.send(f"{origin_message}")
         recruit_message_id = message.id
+        role = discord.utils.get(message.guild.roles, name=roles[0]["name"])
+        await self.original_interaction.user.add_roles(role)
         await message.add_reaction("✅")
         await message.add_reaction("❌")
 
 
 class MyView(View):
-    @discord.ui.button(label="입력", style=discord.ButtonStyle.primary)
-    async def open_modal(self, interaction: discord.Interaction, button: Button):
-        modal = MyModal(interaction)
+    def __init__(self):
+        super().__init__()
+
+        options = [
+            {"label": "롤 자랭", "description": "5명 모집", "value": 5},
+            {"label": "배그 스쿼드", "description": "4명 모집", "value": 4},
+            {"label": "롤 내전", "description": "10명 모집", "value": 10},
+        ]
+
+        select_options = [
+            discord.SelectOption(label=opt["label"], description=opt["description"], value=json.dumps(opt))
+            for opt in options
+        ]
+
+        self.select = Select(
+            placeholder="게임 타입 선택",
+            options=select_options,
+            custom_id="game_type_select"
+        )
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        game_info = json.loads(self.select.values[0])
+        modal = MyModal(original_interaction=interaction, game_info=game_info)
         await interaction.response.send_modal(modal)
 
 @bot.command(name='모집종료')
@@ -224,7 +249,7 @@ async def on_raw_reaction_add(payload):
         await message.edit(content=f"{origin_message}{edit_message}")
         target_role = [discord.utils.get(message.guild.roles, name=role["name"]) for role in roles]
         join_count = len(target_role[0].members)
-        if join_count == recruit_number:
+        if join_count == recruit_num:
             members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
             if members_role_1 == []:
                 role1 = ''
