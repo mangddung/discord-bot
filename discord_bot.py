@@ -142,8 +142,11 @@ async def end_recruitment(ctx):
         await ctx.send("모집자만 종료할 수 있습니다.")
         return
     await reset_roles(roles, ctx)
-    message = await ctx.channel.fetch_message(int(recruit_message_id))
-    await message.delete()
+    try:
+        message = await ctx.channel.fetch_message(int(recruit_message_id))
+        await message.delete()
+    except:
+        recruit_message_id = ''
     recruit_status = False
     recruit_message_id = ''
     game_player = 0
