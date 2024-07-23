@@ -1,3 +1,5 @@
 __pycache__/
 dico_token.py
 recruit_bot.db
+discord.log
+self_bot.py
