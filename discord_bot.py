@@ -210,22 +210,6 @@ async def resend(ctx):
     print(edit_message)
     await msg.edit(content=f"{origin_message}{edit_message}")
 
-@bot.command(name='명령어')
-async def help(ctx):
-    await ctx.send(
-        "!모집 : 모집 양식을 입력할 수 있는 버튼 메시지를 보냅니다.\n"
-        "!모집종료 : 모집을 종료합니다.\n"
-        "!명령어 : 도움말을 출력합니다.\n"
-        "!모임 : 모집이 완료된 경우 모임을 시작합니다.(멤버 멘션)\n"
-        "!재전송 : 모집 메시지를 재전송합니다.\n\n"
-        "관리자 명령어\n"
-        "!역할생성 : 봇에서 사용하는 역할을 생성합니다.\n"
-        "!역할삭제 : 봇에서 사용하는 역할을 삭제합니다.\n"
-        "!채널생성 [채널명] : 권한 부여 채널을 생성합니다.\n"
-        "!메시지생성 [대상채널명] : 대상 채널에 권한 부여 메시지를 생성합니다.\n"
-        "!메시지삭제 [대상채널명] : 대상 채널에 권한 부여 메시지를 삭제합니다."
-    )
-
 @bot.event
 async def on_raw_reaction_add(payload):
     global origin_message
@@ -574,7 +558,7 @@ async def on_member_join(member):
                     try:
                         await channel.set_permissions(member, read_messages=False)
                     except:
-                        logging.error(f'{member.display_name}님의 {channel.name} 텍스트 채널 권한 거부
+                        logging.error(f'{member.display_name}님의 {channel.name} 텍스트 채널 권한 거부')
                 elif channel_type == 'voice':
                     if channel.id == target_channel_id:
                         overwrite = discord.PermissionOverwrite()
@@ -617,6 +601,24 @@ async def on_voice_state_update(member, before, after):
                     logging.info(f'{member.display_name}님의 게스트 추방, DB삭제 성공')
         except:
             logging.error('게스트 추방 실패')
+
+
+@bot.command(name='명령어')
+async def help(ctx):
+    await ctx.send(
+        "!모집 : 모집 양식을 입력할 수 있는 버튼 메시지를 보냅니다.\n"
+        "!모집종료 : 모집을 종료합니다.\n"
+        "!명령어 : 도움말을 출력합니다.\n"
+        "!모임 : 모집이 완료된 경우 모임을 시작합니다.(멤버 멘션)\n"
+        "!재전송 : 모집 메시지를 재전송합니다.\n\n"
+        "!게스트 : 접속 중인 음성 채널에 손님 초대 링크를 생성합니다.\n\n"
+        "관리자 명령어\n"
+        "!역할생성 : 봇에서 사용하는 역할을 생성합니다.\n"
+        "!역할삭제 : 봇에서 사용하는 역할을 삭제합니다.\n"
+        "!채널생성 [채널명] : 권한 부여 채널을 생성합니다.\n"
+        "!메시지생성 [대상채널명] : 대상 채널에 권한 부여 메시지를 생성합니다.\n"
+        "!메시지삭제 [대상채널명] : 대상 채널에 권한 부여 메시지를 삭제합니다."
+    )
 
 @bot.event
 async def on_ready():
