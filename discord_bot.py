@@ -1,13 +1,16 @@
 from dico_token import Token
-import discord
 import asyncio
 import json
+import discord
 from discord.ext import commands
+from discord.ui import Modal, TextInput, View, Button, Select
 from functions import modify_msg_form, reset_roles, remove_reaction
 from datetime import datetime, timedelta
 from holidayskr import is_holiday
-from discord.ui import Modal, TextInput, View, Button, Select
 import sqlite3
+import logging
+
+handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -273,6 +276,7 @@ async def on_raw_reaction_add(payload):
                 target_channel = bot.get_channel(int(db[4]))
                 member = message.guild.get_member(payload.user_id)
                 await target_channel.set_permissions(member, read_messages=True)
+                await target_channel.set_permissions(member, send_messages=True)
                 print(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 부여하셨습니다.')
 
 @bot.event
@@ -307,23 +311,9 @@ async def on_raw_reaction_remove(payload):
                 target_channel = bot.get_channel(int(db[4]))
                 member = message.guild.get_member(payload.user_id)
                 await target_channel.set_permissions(member, read_messages=False)
+                await target_channel.set_permissions(member, send_messages=False)
                 print(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 취소하셨습니다.')
 
-
-
-#서버에 들어오면 역할 생성
-@bot.event
-async def on_guild_join(guild):
-    role_list = roles + voice_kick_roles
-    for role_data in role_list:
-        role_name = role_data["name"]
-        color = role_data["color"]
-        existing_role = discord.utils.get(guild.roles, name=role_name)
-        if existing_role:
-            print(f"역할 '{role_name}'가 사용중입니다. 봇에서 사용하는 역할과 중복될 수 있습니다.")
-        else:
-            await guild.create_role(name=role_name, color=color)
-            print(f"역할 '{role_name}'이 생성되었습니다.")
 
 #집중모드 역할을 가진 유저가 음성채널에 들어오면 추방
 #주말 및 공휴일은 제외
@@ -357,7 +347,7 @@ async def create_access_channel(ctx, *, channel_name: str):
     guild = ctx.guild
     channel = await guild.create_text_channel(channel_name)
     #비공개 채널 설정
-    await channel.set_permissions(guild.default_role, send_messages=False)
+    await channel.set_permissions(guild.default_role, read_messages=False)
     await ctx.send(f"채널 '{channel.name}'이 생성되었습니다.")
 
 #권한 부여 메시지 생성
@@ -464,9 +454,34 @@ async def delete_role(ctx):
         msg += f"역할 '{', '.join(success_list)}'이 삭제되었습니다."
     await ctx.send(msg)
 
+#게스트 초대 코드 명령어
+@bot.command(name='게스트')
+async def guest(ctx):
+    role = discord.utils.get(ctx.guild.roles, name='온라인')
+    if not role:
+        await ctx.send("온라인 역할이 존재하지 않습니다. 관리자에게 문의해주세요.")
+        return
+    user_roles = ctx.author.roles[1:] #사용자 역할 목록
+    if role in user_roles:
+        author_voice_state = ctx.author.voice
+        if author_voice_state and author_voice_state.channel:
+            voice_channel = author_voice_state.channel
+            try:
+                invite = await voice_channel.create_invite(max_age=1800, max_uses=1, unique=True, guest=True)
+                await ctx.author.send(f"음성 채널 초대 링크: {invite.url}")
+                await ctx.send(f"{ctx.author.mention}, DM으로 초대 링크를 보냈습니다. 해당 링크는 30분간 2번 사용 가능합니다.")
+            except:
+
+                await ctx.send(f"{ctx.author.mention}, 초대 링크 생성에 실패하였습니다.")
+        else:
+            await ctx.send(f"{ctx.author.mention}, 먼저 음성 채널에 입장해주세요.")
+    else:
+        await ctx.send('온라인 역할이 있는 유저만 명령어 사용이 가능합니다.')
+                   
+
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.Game(name="!명령어"))
     print('Bot is ready')
 
-bot.run(Token)
+bot.run(Token, log_handler=handler)
