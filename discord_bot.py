@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS channel_access (
     target_channel_id INTEGER NOT NULL
 )
 ''')
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS guest_invite_code (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id INTEGER NOT NULL,
+    invite_code TEXT NOT NULL,
+    inviter_id INTEGER NOT NULL,
+    inviter_name TEXT NOT NULL,
+    target_channel_id INTEGER NOT NULL,
+    target_user_id INTEGER
+)
+''')
 conn.commit()
 
 recruit_status = False
@@ -44,6 +55,7 @@ voice_kick_roles = [
     {"name": "음성차단", "color": discord.Color.default()},
 ]
 dos_count = {}
+invite_tracker = {}
 origin_message = ''
 recruit_message_id = ''
 recruit_user = ''
@@ -104,7 +116,6 @@ class MyModal(Modal):
         await self.original_interaction.user.add_roles(role)
         await message.add_reaction("✅")
         await message.add_reaction("❌")
-
 
 class MyView(View):
     def __init__(self):
@@ -277,7 +288,7 @@ async def on_raw_reaction_add(payload):
                 member = message.guild.get_member(payload.user_id)
                 await target_channel.set_permissions(member, read_messages=True)
                 await target_channel.set_permissions(member, send_messages=True)
-                print(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 부여하셨습니다.')
+                logging.info(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 부여하셨습니다.')
 
 @bot.event
 async def on_raw_reaction_remove(payload):
@@ -312,7 +323,7 @@ async def on_raw_reaction_remove(payload):
                 member = message.guild.get_member(payload.user_id)
                 await target_channel.set_permissions(member, read_messages=False)
                 await target_channel.set_permissions(member, send_messages=False)
-                print(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 취소하셨습니다.')
+                logging.info(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 취소하셨습니다.')
 
 
 #집중모드 역할을 가진 유저가 음성채널에 들어오면 추방
@@ -364,15 +375,20 @@ async def set_target_channel(ctx, target_channel: str):
         await ctx.send(f"채널 '{target_channel}'이 존재하지 않습니다.")
     #존재하면 메시지 생성, 데이터베이스에 저장
     else:
-        message = await ctx.send(f"__**{target_channel}**__ 채널 권한 부여를 위해 아래 이모지를 눌러주세요.")
-        await message.add_reaction("✅")
-        cursor.execute(f'''
-        INSERT INTO channel_access (server_id, access_channel_id, access_message_id, target_channel_id)
-        VALUES ('{ctx.guild.id}', '{ctx.channel.id}', '{message.id}', '{target_channel_id}')
-        ''')
-        conn.commit()
-        #명령어 메시지 삭제
-        await ctx.message.delete()
+        try:
+            message = await ctx.send(f"__**{target_channel}**__ 채널 권한 부여를 위해 아래 이모지를 눌러주세요.")
+            await message.add_reaction("✅")
+            cursor.execute(f'''
+            INSERT INTO channel_access (server_id, access_channel_id, access_message_id, target_channel_id)
+            VALUES ('{ctx.guild.id}', '{ctx.channel.id}', '{message.id}', '{target_channel_id}')
+            ''')
+            conn.commit()
+            #명령어 메시지 삭제
+            await ctx.message.delete()
+            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 생성')
+        except:
+            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 생성 실패')
+            ctx.send(f"채널 '{target_channel}' 권한 부여 메시지 생성 실패")
 
 #권한 부여 메시지 삭제
 @bot.command(name='메시지삭제')
@@ -394,16 +410,20 @@ async def delete_target_channel(ctx, target_channel: str):
     ''', (ctx.channel.id, target_channel_id))
     db = cursor.fetchone()
     if db:
-        print(db)
-        message = await ctx.channel.fetch_message(db[3])
-        await message.delete()
-        cursor.execute('''
-        DELETE FROM channel_access
-        WHERE access_message_id = ?
-        ''', (db[3],))
-        conn.commit()
-        #명령어 메시지 삭제
-        await ctx.message.delete()
+        try:
+            message = await ctx.channel.fetch_message(db[3])
+            await message.delete()
+            cursor.execute('''
+            DELETE FROM channel_access
+            WHERE access_message_id = ?
+            ''', (db[3],))
+            conn.commit()
+            #명령어 메시지 삭제
+            await ctx.message.delete()
+            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 삭제')
+        except:
+            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 삭제 실패')
+            ctx.send(f"채널 '{target_channel}' 권한 부여 메시지 삭제 실패")
 
 #================================================================================================
 #역할생성 명령어
@@ -467,21 +487,143 @@ async def guest(ctx):
         if author_voice_state and author_voice_state.channel:
             voice_channel = author_voice_state.channel
             try:
-                invite = await voice_channel.create_invite(max_age=1800, max_uses=1, unique=True, guest=True)
-                await ctx.author.send(f"음성 채널 초대 링크: {invite.url}")
-                await ctx.send(f"{ctx.author.mention}, DM으로 초대 링크를 보냈습니다. 해당 링크는 30분간 2번 사용 가능합니다.")
-            except:
+                guest_max_age = 30
+                guest_max_uses = 1
+                invite = await voice_channel.create_invite(max_age=guest_max_age*60, max_uses=guest_max_uses, unique=True)
+                await ctx.author.send(f"{voice_channel} 음성 채널 초대 링크: {invite.url}")
+                await ctx.send(f"{ctx.author.mention}, DM으로 초대 링크를 보냈습니다. 해당 링크는 {guest_max_age}분간 {guest_max_uses}번 사용 가능합니다.")
+                cursor.execute(f'''
+                INSERT INTO guest_invite_code (server_id, invite_code, inviter_id, inviter_name, target_channel_id)
+                VALUES ('{ctx.guild.id}', '{invite.url[19:]}', '{ctx.author.id}', '{ctx.author.name}', '{voice_channel.id}')
+                ''')
+                conn.commit()
 
+            except:
                 await ctx.send(f"{ctx.author.mention}, 초대 링크 생성에 실패하였습니다.")
         else:
             await ctx.send(f"{ctx.author.mention}, 먼저 음성 채널에 입장해주세요.")
     else:
         await ctx.send('온라인 역할이 있는 유저만 명령어 사용이 가능합니다.')
-                   
+
+#초대 코드 생성, 삭제 이벤트           
+@bot.event
+async def on_invite_create(invite):
+    invites = await invite.guild.invites()
+    invite_tracker[invite.guild.id] = {inv.code: inv.uses for inv in invites}
+
+@bot.event
+async def on_invite_delete(invite):
+    invites = await invite.guild.invites()
+    invite_tracker[invite.guild.id] = {inv.code: inv.uses for inv in invites}
+
+#멤버 서버 입장 이벤트(게스트 확인 후 처리 로직)
+@bot.event
+async def on_member_join(member):
+    guild = member.guild
+    invites_before_join = invite_tracker[guild.id]
+    invites_after_join = await guild.invites()
+    
+    # 업데이트된 초대 코드 목록을 저장
+    invite_tracker[guild.id] = {invite.code: invite.uses for invite in invites_after_join}
+
+    used_invite_code = None
+    inviter = None
+
+    # 사용된 초대 코드를 찾기 위한 로직
+    for invite in invites_after_join:
+        if invite.code in invites_before_join:
+            if invites_before_join[invite.code] < invite.uses:
+                used_invite_code = invite.code
+                inviter = invite.inviter
+                break
+
+    # 만약 초대 코드가 사용된 후 사라졌다면, 이전 목록에서 제거된 코드를 찾아냅니다.
+    if not used_invite_code:
+        used_invites = set(invites_before_join.keys()) - set(invite_tracker[guild.id].keys())
+        if used_invites:
+            used_invite_code = used_invites.pop()
+            inviter = None  # 초대한 사람을 확인할 수 없음
+
+    #게스트 초대 확인 로직
+    if used_invite_code:
+        cursor.execute('''
+        SELECT * FROM guest_invite_code
+        WHERE server_id = ? AND invite_code = ?
+        ''', (guild.id, used_invite_code))
+        db = cursor.fetchone()
+        if db:
+            inviter_name = db[4]
+            target_channel_id = db[5]
+            #초대된 멤버 id db에 저장
+            try:
+                cursor.execute(f'''
+                UPDATE guest_invite_code
+                SET target_user_id = '{member.id}'
+                WHERE server_id = '{guild.id}' AND invite_code = '{used_invite_code}'
+                ''')
+                conn.commit()
+            except:
+                logging.error('게스트 정보 DB 업데이트 실패')
+            
+            await member.send(f"{member.display_name}님이 , {inviter_name}님의 손님 초대로 서버에 입장하셨습니다.")
+            logging.info(f'{member.display_name}님이 {inviter_name}님의 손님 초대로 서버에 입장하셨습니다.')
+            channels = member.guild.channels
+            for channel in channels:
+                channel_type = str(channel.type)
+                if channel_type == 'text':
+                    try:
+                        await channel.set_permissions(member, read_messages=False)
+                    except:
+                        logging.error(f'{member.display_name}님의 {channel.name} 텍스트 채널 권한 거부
+                elif channel_type == 'voice':
+                    if channel.id == target_channel_id:
+                        overwrite = discord.PermissionOverwrite()
+                        overwrite.connect = True
+                        overwrite.view_channel = True
+                        try:
+                            await channel.set_permissions(member, overwrite=overwrite)
+                            logging.info(f'{member.display_name}님에게 {channel.name} 음성 채널 접근 권한을 부여')
+                        except:
+                            logging.error(f'{member.display_name}님의 {channel.name} 음성 채널 권한 부여 실패')
+                    else:
+                        try:
+                            await channel.set_permissions(member, view_channel=False)
+                        except:
+                            logging.error(f'{member.display_name}님의 {channel.name} 음성 채널 권한 거부 실패')
+        else:
+            logging.info(f'{member.display_name}님이 {inviter}님의 일반 초대 코드로 서버에 입장하셨습니다.')
+
+
+#보이스 채널 떠날 때 이벤트(게스트 추방)
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if before.channel is not None and after.channel is None:
+        try:
+            cursor.execute('''
+            SELECT * FROM guest_invite_code
+            WHERE server_id = ? AND target_user_id = ?
+            ''', (member.guild.id, member.id))
+            db = cursor.fetchone()
+            if db:
+                target_channel = bot.get_channel(int(db[5]))
+                if before.channel.id == target_channel.id:
+                    await member.ban(reason='게스트 추방')
+                    await member.unban()
+                    cursor.execute('''
+                    DELETE FROM guest_invite_code
+                    WHERE server_id = ? AND invite_code = ?
+                    ''', (member.guild.id, db[2]))
+                    conn.commit()
+                    logging.info(f'{member.display_name}님의 게스트 추방, DB삭제 성공')
+        except:
+            logging.error('게스트 추방 실패')
 
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.Game(name="!명령어"))
-    print('Bot is ready')
+    for guild in bot.guilds:
+        invites = await guild.invites()
+        invite_tracker[guild.id] = {invite.code: invite.uses for invite in invites}
+    logging.info(f'{bot.user} has connected to Discord!')
 
 bot.run(Token, log_handler=handler)
