@@ -6,6 +6,7 @@ from discord.ext import commands
 from discord.ui import Modal, TextInput, View, Button, Select
 from functions import modify_msg_form, reset_roles, remove_reaction
 from datetime import datetime, timedelta
+import pytz
 from holidayskr import is_holiday
 import sqlite3
 import logging
@@ -32,6 +33,8 @@ intents.guild_reactions = True  # 리액션 관련 이벤트를 감지하도록 
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+tz = pytz.timezone('Asia/Seoul')
+
 conn = sqlite3.connect('recruit_bot.db')
 cursor = conn.cursor()
 cursor.execute('''
@@ -52,7 +55,7 @@ CREATE TABLE IF NOT EXISTS guest_invite_code (
     inviter_name TEXT NOT NULL,
     target_channel_id INTEGER NOT NULL,
     target_user_id INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP,
     joined_at TIMESTAMP
 )
 ''')
@@ -522,9 +525,10 @@ async def guest(ctx):
                 invite = await voice_channel.create_invite(max_age=guest_max_age*60, max_uses=guest_max_uses, unique=True)
                 await ctx.author.send(f"{voice_channel} 음성 채널 초대 링크: {invite.url}")
                 await ctx.send(f"{ctx.author.mention}, DM으로 초대 링크를 보냈습니다. 해당 링크는 {guest_max_age}분간 {guest_max_uses}번 사용 가능합니다.")
+                current_time = datetime.now(tz)
                 cursor.execute(f'''
-                INSERT INTO guest_invite_code (server_id, invite_code, inviter_id, inviter_name, target_channel_id)
-                VALUES ('{ctx.guild.id}', '{invite.url[19:]}', '{ctx.author.id}', '{ctx.author.name}', '{voice_channel.id}')
+                INSERT INTO guest_invite_code (server_id, invite_code, inviter_id, inviter_name, target_channel_id, created_at)
+                VALUES ('{ctx.guild.id}', '{invite.url[19:]}', '{ctx.author.id}', '{ctx.author.name}', '{voice_channel.id}', '{current_time}')
                 ''')
                 conn.commit()
                 logger.info(f'{ctx.author.display_name}님이 {voice_channel.name} 음성 채널에 손님 초대 링크를 생성')
@@ -588,9 +592,10 @@ async def on_member_join(member):
             target_channel_id = db[5]
             #초대된 멤버 id db에 저장
             try:
+                current_time = datetime.now(tz)
                 cursor.execute(f'''
                 UPDATE guest_invite_code
-                SET target_user_id = '{member.id}', joined_at = CURRENT_TIMESTAMP
+                SET target_user_id = '{member.id}', joined_at = '{current_time}'
                 WHERE server_id = '{guild.id}' AND invite_code = '{used_invite_code}'
                 ''')
                 conn.commit()
