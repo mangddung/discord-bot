@@ -610,7 +610,7 @@ async def on_member_join(member):
             #inviter_id로 초대한 사람 닉네임 찾기
             inviter = guild.get_member(inviter_id)
             if inviter:
-                # await member.guild.system_channel.send(f"{member.mention}님이 , {inviter.mention}님의 손님 초대로 서버에 입장하셨습니다.")
+                await member.guild.system_channel.send(f"{member.mention}님이 , {inviter.mention}님의 손님 초대로 서버에 입장하셨습니다.")
                 member_name = member.display_name
                 await member.edit(nick=f'{member_name}(손님)')
                 logging.info(f'{member.display_name}님이 {inviter.name}님의 손님 초대로 서버에 입장하셨습니다.')
