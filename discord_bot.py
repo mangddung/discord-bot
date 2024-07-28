@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS guest_invite_code (
     inviter_id INTEGER NOT NULL,
     inviter_name TEXT NOT NULL,
     target_channel_id INTEGER NOT NULL,
-    target_user_id INTEGER
+    target_user_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    joined_at TIMESTAMP
 )
 ''')
 conn.commit()
@@ -588,7 +590,7 @@ async def on_member_join(member):
             try:
                 cursor.execute(f'''
                 UPDATE guest_invite_code
-                SET target_user_id = '{member.id}'
+                SET target_user_id = '{member.id}', joined_at = CURRENT_TIMESTAMP
                 WHERE server_id = '{guild.id}' AND invite_code = '{used_invite_code}'
                 ''')
                 conn.commit()
@@ -623,26 +625,31 @@ async def on_member_join(member):
 #보이스 채널 떠날 때 이벤트(게스트 추방)
 @bot.event
 async def on_voice_state_update(member, before, after):
+    user_roles = member.roles[1:] #사용자 역할 목록
+    if discord.utils.get(member.guild.roles, name=guest_role[0]["name"]) not in user_roles:
+        return
     if before.channel is not None and after.channel is None:
         try:
             cursor.execute('''
             SELECT * FROM guest_invite_code
             WHERE server_id = ? AND target_user_id = ?
             ''', (member.guild.id, member.id))
-            db = cursor.fetchone()
-            if db:
-                target_channel = bot.get_channel(int(db[5]))
-                if before.channel.id == target_channel.id:
-                    await member.ban(reason='게스트 추방')
-                    await member.unban()
-                    cursor.execute('''
-                    DELETE FROM guest_invite_code
-                    WHERE server_id = ? AND invite_code = ?
-                    ''', (member.guild.id, db[2]))
-                    conn.commit()
-                    logging.info(f'{member.display_name}님의 게스트 추방, DB삭제 성공')
+            dbs = cursor.fetchall()
+            if dbs:
+                for db in dbs:
+                    target_channel = bot.get_channel(int(db[5]))
+                    if before.channel.id == target_channel.id:
+                        await member.ban(reason='게스트 추방')
+                        await member.unban()
+                        cursor.execute('''
+                        DELETE FROM guest_invite_code
+                        WHERE server_id = ? AND target_user_id = ?
+                        ''', (member.guild.id, db[6]))
+                        conn.commit()
+                        logging.info(f'{member.display_name}님의 게스트 추방, DB삭제 성공')
         except:
-            logging.error('게스트 추방 실패')
+            await member.default_channel.send(f"{member.display_name}님의 게스트 추방 실패 관리자 확인 바람")
+            logging.error(f'{member.display_name}님의게스트 추방 실패')
 
 #채널 생성 이벤트(게스트 권한 설정)
 @bot.event
