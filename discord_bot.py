@@ -10,7 +10,16 @@ from holidayskr import is_holiday
 import sqlite3
 import logging
 
-handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
+logging.basicConfig(
+    level=logging.DEBUG,  # 필요한 로그 레벨로 설정합니다. 예: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("discord_bot.log"),  # 로그 파일 이름을 지정합니다.
+        logging.StreamHandler()  # 콘솔에 로그를 출력하려면 이 핸들러를 추가합니다.
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -18,6 +27,8 @@ intents.guilds = True
 intents.members = True
 intents.reactions = True
 intents.voice_states = True
+intents.guild_messages = True  # 메시지 관련 이벤트를 감지하도록 합니다
+intents.guild_reactions = True  # 리액션 관련 이벤트를 감지하도록 합니다
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
@@ -54,6 +65,8 @@ voice_kick_roles = [
     {"name": "집중모드", "color": discord.Color.default()},
     {"name": "음성차단", "color": discord.Color.default()},
 ]
+guest_role = [{"name": "손님", "color": discord.Color.default(), "hoist": True}]
+
 dos_count = {}
 invite_tracker = {}
 origin_message = ''
@@ -414,7 +427,7 @@ async def delete_target_channel(ctx, target_channel: str):
 @bot.command(name='역할생성')
 @commands.has_permissions(administrator=True)
 async def create_role(ctx):
-    role_list = roles + voice_kick_roles
+    role_list = roles + voice_kick_roles + guest_role
     fail_list = []
     success_list = []
     msg = ''
@@ -424,20 +437,47 @@ async def create_role(ctx):
         existing_role = discord.utils.get(ctx.guild.roles, name=role_name)
         if existing_role:
             fail_list.append(role_name)
-        else:
-            await ctx.guild.create_role(name=role_name, color=color)
-            success_list.append(role_name)
+        else: #손님 역할 생성 시 hoist 옵션 추가
+            if role_name in guest_role[0]["name"]: #손님 역할 생성 및 권한 설정
+                try:
+                    await ctx.guild.create_role(name=role_name, color=color, hoist=guest_role[0]["hoist"])
+                    role = discord.utils.get(ctx.guild.roles, name=role_name)
+                    channels = ctx.guild.channels
+                    for channel in channels:
+                        if isinstance(channel, discord.TextChannel):
+                            try:
+                                await channel.set_permissions(role, read_messages=False)
+                            except:
+                                logging.error(f'{role_name} 역할의 {channel.name} 텍스트 채널 권한 거부 실패')
+                        elif isinstance(channel, discord.VoiceChannel):
+                            try:
+                                await channel.set_permissions(role, view_channel=False)
+                            except:
+                                logging.error(f'{role_name} 역할의 {channel.name} 음성 채널 권한 거부 실패')
+                    success_list.append(role_name)
+                except:
+                    fail_list.append(role_name)
+            else:
+                try:
+                    await ctx.guild.create_role(name=role_name, color=color)
+                    success_list.append(role_name)
+                except:
+                    fail_list.append(role_name)
+            
+    
     if fail_list:
         msg += f"역할 '{', '.join(fail_list)}'가 이미 사용중입니다. 역할을 삭제 후 다시 시도해주세요.\n"
+        logging.error(f'역할 생성 실패: {fail_list}')
     if success_list:
         msg += f"역할 '{', '.join(success_list)}'이 생성되었습니다."
+        logging.info(f'역할 생성 성공: {success_list}')
     await ctx.send(msg)
 
 #역할삭제 명령어
 @bot.command(name='역할삭제')
 @commands.has_permissions(administrator=True)
 async def delete_role(ctx):
-    role_list = roles + voice_kick_roles
+    role_list = roles + voice_kick_roles + guest_role
     fail_list = []
     success_list = []
     msg = ''
@@ -461,6 +501,10 @@ async def delete_role(ctx):
 #게스트 초대 코드 명령어
 @bot.command(name='게스트')
 async def guest(ctx):
+    check_guest_role = discord.utils.get(ctx.guild.roles, name=guest_role[0]["name"])
+    if not check_guest_role:
+        await ctx.send("게스트 역할이 존재하지 않습니다. 관리자에게 문의해주세요.")
+        return
     role = discord.utils.get(ctx.guild.roles, name='온라인')
     if not role:
         await ctx.send("온라인 역할이 존재하지 않습니다. 관리자에게 문의해주세요.")
@@ -481,9 +525,10 @@ async def guest(ctx):
                 VALUES ('{ctx.guild.id}', '{invite.url[19:]}', '{ctx.author.id}', '{ctx.author.name}', '{voice_channel.id}')
                 ''')
                 conn.commit()
-
+                logger.info(f'{ctx.author.display_name}님이 {voice_channel.name} 음성 채널에 손님 초대 링크를 생성')
             except:
                 await ctx.send(f"{ctx.author.mention}, 초대 링크 생성에 실패하였습니다.")
+                logger.error(f'{ctx.author.display_name}님이 {voice_channel.name} 음성 채널에 손님 초대 링크 생성 실패')
         else:
             await ctx.send(f"{ctx.author.mention}, 먼저 음성 채널에 입장해주세요.")
     else:
@@ -536,6 +581,7 @@ async def on_member_join(member):
         ''', (guild.id, used_invite_code))
         db = cursor.fetchone()
         if db:
+            inviter_id = db[3]
             inviter_name = db[4]
             target_channel_id = db[5]
             #초대된 멤버 id db에 저장
@@ -546,34 +592,30 @@ async def on_member_join(member):
                 WHERE server_id = '{guild.id}' AND invite_code = '{used_invite_code}'
                 ''')
                 conn.commit()
+                try:
+                    await member.add_roles(discord.utils.get(guild.roles, name=guest_role[0]["name"]))
+                    target_channel = bot.get_channel(target_channel_id)
+                    if target_channel:
+                        try:
+                            await target_channel.set_permissions(member, connect=True)
+                        except Exception as e:
+                            logging.error(f'{member.display_name}님의 음성 채널 접근 권한 부여 실패')
+                except:
+                    logging.error(f'{member.display_name}님의 게스트 역할 부여 실패')
+                    member.guild.system_channel.send(f"{member.display_name}님의 게스트 역할 부여 실패")
+                    await member.ban(reason='권한 설정 실패로 추방')
+                    await member.unban()
             except:
                 logging.error('게스트 정보 DB 업데이트 실패')
-            
-            await member.send(f"{member.display_name}님이 , {inviter_name}님의 손님 초대로 서버에 입장하셨습니다.")
-            logging.info(f'{member.display_name}님이 {inviter_name}님의 손님 초대로 서버에 입장하셨습니다.')
-            channels = member.guild.channels
-            for channel in channels:
-                channel_type = str(channel.type)
-                if channel_type == 'text':
-                    try:
-                        await channel.set_permissions(member, read_messages=False)
-                    except:
-                        logging.error(f'{member.display_name}님의 {channel.name} 텍스트 채널 권한 거부')
-                elif channel_type == 'voice':
-                    if channel.id == target_channel_id:
-                        overwrite = discord.PermissionOverwrite()
-                        overwrite.connect = True
-                        overwrite.view_channel = True
-                        try:
-                            await channel.set_permissions(member, overwrite=overwrite)
-                            logging.info(f'{member.display_name}님에게 {channel.name} 음성 채널 접근 권한을 부여')
-                        except:
-                            logging.error(f'{member.display_name}님의 {channel.name} 음성 채널 권한 부여 실패')
-                    else:
-                        try:
-                            await channel.set_permissions(member, view_channel=False)
-                        except:
-                            logging.error(f'{member.display_name}님의 {channel.name} 음성 채널 권한 거부 실패')
+            #inviter_id로 초대한 사람 닉네임 찾기
+            inviter = guild.get_member(inviter_id)
+            if inviter:
+                # await member.guild.system_channel.send(f"{member.mention}님이 , {inviter.mention}님의 손님 초대로 서버에 입장하셨습니다.")
+                member_name = member.display_name
+                await member.edit(nick=f'{member_name}(손님)')
+                logging.info(f'{member.display_name}님이 {inviter.name}님의 손님 초대로 서버에 입장하셨습니다.')
+            else:
+                await member.guild.system_channel.send(f"{member.mention}님이 , {inviter_name}님의 손님 초대로 서버에 입장하셨습니다.")
         else:
             logging.info(f'{member.display_name}님이 {inviter}님의 일반 초대 코드로 서버에 입장하셨습니다.')
 
@@ -602,6 +644,23 @@ async def on_voice_state_update(member, before, after):
         except:
             logging.error('게스트 추방 실패')
 
+#채널 생성 이벤트(게스트 권한 설정)
+@bot.event
+async def on_guild_channel_create(channel):
+    role = discord.utils.get(channel.guild.roles, name=guest_role[0]["name"])
+    # 채널 생성 이벤트가 호출될 때마다 이 함수가 실행됩니다
+    if isinstance(channel, discord.TextChannel):
+        try:
+            await channel.set_permissions(role, read_messages=False)
+            logging.info(f'{role.name} 역할의 {channel.name} 텍스트 채널 권한 거부 성공')
+        except:
+            logging.error(f'{role.name} 역할의 {channel.name} 텍스트 채널 권한 거부 실패')
+    elif isinstance(channel, discord.VoiceChannel):
+        try:
+            await channel.set_permissions(role, view_channel=False)
+            logging.info(f'{role.name} 역할의 {channel.name} 음성 채널 권한 거부 성공')
+        except:
+            logging.error(f'{role.name} 역할의 {channel.name} 음성 채널 권한 거부 실패')
 
 @bot.command(name='명령어')
 async def help(ctx):
@@ -620,6 +679,7 @@ async def help(ctx):
         "!메시지삭제 [대상채널명] : 대상 채널에 권한 부여 메시지를 삭제합니다."
     )
 
+
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.Game(name="!명령어"))
@@ -628,4 +688,4 @@ async def on_ready():
         invite_tracker[guild.id] = {invite.code: invite.uses for invite in invites}
     logging.info(f'{bot.user} has connected to Discord!')
 
-bot.run(Token, log_handler=handler)
+bot.run(Token)
