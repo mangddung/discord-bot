@@ -3,7 +3,7 @@ import asyncio
 import json
 import discord
 from discord.ext import commands
-from discord.ui import Modal, TextInput, View, Button, Select
+from discord.ui import Modal, View, Button, Select, TextInput
 from functions import modify_msg_form, reset_roles, remove_reaction
 from datetime import datetime, timedelta
 import pytz
@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS channel_access (
     server_id INTEGER NOT NULL,
     access_channel_id INTEGER NOT NULL,
     access_message_id INTEGER NOT NULL,
-    target_channel_id INTEGER NOT NULL
+    target_channel_id INTEGER NOT NULL,
+    target_channel_name TEXT NOT NULL
 )
 ''')
 cursor.execute('''
@@ -59,6 +60,17 @@ CREATE TABLE IF NOT EXISTS guest_invite_code (
     joined_at TIMESTAMP
 )
 ''')
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS sleep_mode (
+    server_id TEXT, 
+    user_id TEXT,
+    username TEXT,
+    start_time TEXT,
+    end_time TEXT, 
+    weekdays INTEGER, 
+    weekends INTEGER
+)
+''')
 conn.commit()
 
 recruit_status = False
@@ -67,10 +79,11 @@ roles = [
     {"name": "불참", "color": discord.Color.default(), "emoji": "❌"},
 ]
 voice_kick_roles = [
-    {"name": "집중모드", "color": discord.Color.default()},
+    {"name": "취침모드", "color": discord.Color.default()},
     {"name": "음성차단", "color": discord.Color.default()},
 ]
 guest_role = [{"name": "손님", "color": discord.Color.default(), "hoist": True}]
+NOTICE_INTERVALS = [1, 5, 30]
 
 dos_count = {}
 invite_tracker = {}
@@ -241,10 +254,10 @@ async def on_raw_reaction_add(payload):
         #장난치는놈 경고
         dos_count[payload.user_id] = dos_count.get(payload.user_id, 0) + 1
         #경고 메시지 warning_message에 있는 횟수만큼 경고 메시지 출력
-        if dos_count[payload.user_id] in warning_message:
-            await message.channel.send(f"{member.mention} {warning_message[dos_count[payload.user_id]]}")
-            if dos_count[payload.user_id] >= max(warning_message.keys()):
-                dos_count[payload.user_id] = 0
+        #if dos_count[payload.user_id] in warning_message:
+        #    await message.channel.send(f"{member.mention} {warning_message[dos_count[payload.user_id]]}")
+        #    if dos_count[payload.user_id] >= max(warning_message.keys()):
+        #        dos_count[payload.user_id] = 0
         #타겟 멤버 역할 초기화
         for role_data in roles:
             role_name = role_data["name"]
@@ -262,7 +275,7 @@ async def on_raw_reaction_add(payload):
             await member.add_roles(role)
             print(f'{member.display_name}님이 모집에 불참을 선택하셨습니다.')
         else:
-            await remove_reaction(message, member, str(payload.emoji), '')
+            await remove_reaction(message, member, str(payload.emoji))
         await asyncio.sleep(0.5)
         edit_message = await modify_msg_form(roles, message)
         await message.edit(content=f"{origin_message}{edit_message}")
@@ -288,8 +301,7 @@ async def on_raw_reaction_add(payload):
             if db:
                 target_channel = bot.get_channel(int(db[4]))
                 member = message.guild.get_member(payload.user_id)
-                await target_channel.set_permissions(member, read_messages=True)
-                await target_channel.set_permissions(member, send_messages=True)
+                await target_channel.set_permissions(member, read_messages=True, send_messages=True)
                 logging.info(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 부여하셨습니다.')
 
 @bot.event
@@ -328,27 +340,167 @@ async def on_raw_reaction_remove(payload):
                 logging.info(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 취소하셨습니다.')
 
 
-#집중모드 역할을 가진 유저가 음성채널에 들어오면 추방
-#주말 및 공휴일은 제외
-#18시 이전에만 추방
-#=============================
-#데이터베이스 추가하여 개인별로 설정할 수 있도록 변경
-#=============================
+#취침모드 기능
+#=========================================
+class SleepModeModal(discord.ui.Modal, title="취침모드 설정"):
+    weekdays_input = discord.ui.TextInput(label="요일 (평일, 주말, 모두)", placeholder="평일, 주말, 모두 중 하나 입력")
+    start_time_input = discord.ui.TextInput(label="시작 시간 (HH:MM)", placeholder="예: 23:00")
+    end_time_input = discord.ui.TextInput(label="종료 시간 (HH:MM)", placeholder="예: 06:00")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        weekdays = self.weekdays_input.value
+        start_time = self.start_time_input.value
+        end_time = self.end_time_input.value
+
+        # 시간 형식 확인
+        try:
+            datetime.strptime(start_time, "%H:%M")
+            datetime.strptime(end_time, "%H:%M")
+        except ValueError:
+            await interaction.response.send_message("시간 형식이 잘못되었습니다. HH:MM 형식으로 입력해주세요.", ephemeral=True)
+            return
+        
+        # DB에 기존 데이터 삭제 후 새로운 데이터 삽입
+        cursor.execute('''DELETE FROM sleep_mode WHERE server_id = ? AND user_id = ?''',
+                       (str(interaction.guild.id), str(interaction.user.id)))
+        # DB에 저장 또는 업데이트
+        cursor.execute('''REPLACE INTO sleep_mode (server_id, user_id, username, start_time, end_time, weekdays, weekends)
+                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                          (str(interaction.guild.id), str(interaction.user.id), interaction.user.name, start_time, end_time,
+                           1 if weekdays in ["평일", "모두"] else 0, 1 if weekdays in ["주말", "모두"] else 0))
+        conn.commit()
+        await interaction.response.send_message("취침모드가 설정되었습니다.", ephemeral=True)
+
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if before.channel is None and after.channel is not None:  # 유저가 보이스 채널에 들어옴
+    await ban_guest(member,before,after)
+    if after.channel is not None:  # 유저가 보이스 채널에 들어옴
         role_names = [role.name for role in member.roles]
-        current_time = datetime.now().strftime("%Y-%m-%d")
-        current_hour = datetime.now().hour
-        check_holiday = is_holiday(current_time)
-        today_day = datetime.today().weekday()
-        if today_day == 5 or today_day == 6 or check_holiday: #주말, 공휴일
-            print('주말 및 공휴일')
-        elif '집중모드' in role_names and 18>current_hour:
-            await member.move_to(None)
-        if '음성차단' in role_names:
+        if voice_kick_roles[1]['name'] in role_names: #음성차단
             await member.move_to(None)
             print('집중모드로 인한 음성채널 추방')
+            return
+        current_time = datetime.now()
+        current_time_str = datetime.now().strftime("%Y-%m-%d")
+        today_day = datetime.today().weekday()
+        check_holiday = is_holiday(current_time_str) or today_day >= 5
+        if voice_kick_roles[0]['name'] in role_names: #취침모드
+            cursor.execute('''
+                SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE 
+                server_id = ? AND user_id = ?''',
+                (str(member.guild.id), str(member.id))
+                )
+            result = cursor.fetchone()
+            if result:
+                start_time, end_time, weekdays, weekends = result
+                if (not check_holiday and weekdays) or (check_holiday and weekends):
+                    # 시간 확인
+                    start_dt = datetime.strptime(start_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
+                    end_dt = datetime.strptime(end_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
+                    if end_dt < start_dt:
+                        end_dt += timedelta(days=1)  # 종료 시간이 다음 날일 경우
+                    if start_dt <= current_time <= end_dt:
+                        await member.move_to(None)  # 보이스 채널에서 추방
+                        await member.send("현재 취침 시간입니다. 보이스 채널에 접속할 수 없습니다.")
+
+@bot.tree.command(name="취침모드설정")
+async def set_sleep_mode(interaction: discord.Interaction):
+    await interaction.response.send_modal(SleepModeModal())
+
+#취침모드켜기
+@bot.tree.command(name="취침모드켜기")
+async def activate_sleep_mode(ctx):
+    SLEEP_MODE_ROLE = voice_kick_roles[0]['name']
+    role = discord.utils.get(ctx.guild.roles, name=SLEEP_MODE_ROLE)
+
+    if role is None:
+        await ctx.send('역할이 없습니다. 역할 생성 명령어를 사용한 후 이용해주세요.')
+        return
+
+    # DB에서 설정값 확인
+    cursor.execute("SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE server_id = ?", (ctx.guild.id,))
+    result = cursor.fetchone()
+
+    if result:
+        start_time, end_time, weekdays, weekends = result
+        await ctx.author.send(f"{ctx.author.mention}, 현재 설정된 취침 모드 정보:\n"
+                       f"시작 시간: {start_time}\n"
+                       f"종료 시간: {end_time}\n"
+                       f"주중 설정: {'활성화' if weekdays else '비활성화'}\n"
+                       f"주말 설정: {'활성화' if weekends else '비활성화'}")
+    else:
+        await ctx.author.send(f"{ctx.author.mention}, 취침 모드가 설정되어 있지 않습니다. "
+                       f"설정을 위해 `/취침모드설정` 명령어를 사용해주세요.")
+    
+    await ctx.author.add_roles(role)
+
+# 취침모드 끄기
+@bot.tree.command(name="취침모드끄기")
+async def deactivate_sleep_mode(ctx):
+    SLEEP_MODE_ROLE = voice_kick_roles[0]['name']
+    role = discord.utils.get(ctx.guild.roles, name=SLEEP_MODE_ROLE)
+    if role is None:
+        ctx.send('역할이 없습니다. 역할생성 명령어를 사용한 후 이용해주세요.')
+        return
+    if role:
+        await ctx.author.remove_roles(role)
+        await ctx.send(f"{ctx.author.mention}, 취침모드가 비활성화되었습니다.")
+
+#1분마다 취침시간 확인 및 알림
+async def check_sleep_mode():
+    await bot.wait_until_ready()  # 봇이 준비될 때까지 대기
+    while not bot.is_closed():
+        current_time = datetime.now()  # 현재 시간
+        current_time_str = current_time.strftime("%Y-%m-%d")
+
+        # DB에서 설정값 가져오기
+        cursor.execute("SELECT server_id FROM sleep_mode")
+        server_ids = cursor.fetchall()
+        
+        if server_ids:
+            check_holiday = is_holiday(current_time_str)  # 현재 날짜에 따라 휴일 확인
+            # 서버 확인
+            for server in server_ids:
+                guild = bot.get_guild(int(server[0]))  # server_id를 사용하여 guild 객체 가져오기
+                if guild is None:
+                    continue  # 해당 서버가 존재하지 않으면 다음으로 넘어감
+
+                cursor.execute('''
+                    SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE 
+                    server_id = ?''', (str(server[0]),))
+                results = cursor.fetchall()  # 여러 결과를 가져옴
+                
+                # 각 설정에 대해 처리
+                for row in results:
+                    start_time, end_time, weekdays, weekends = row
+                    
+                    # 현재 시간에 따라 시작 및 종료 시간 설정
+                    start_dt = datetime.strptime(start_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
+                    end_dt = datetime.strptime(end_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
+
+                    if end_dt < start_dt:
+                        end_dt += timedelta(days=1)  # 종료 시간이 다음 날일 경우
+                    
+                    # 알림 보내기
+                    for notice_interval in NOTICE_INTERVALS:
+                        notice_time = start_dt - timedelta(minutes=notice_interval)
+                        # 현재 시간이 알림 시간에 해당하면 알림을 보냄
+                        if current_time >= notice_time and current_time < (notice_time + timedelta(seconds=59)):
+                            for member in guild.members:
+                                if member.voice and any(role.name == "취침모드" for role in member.roles):  # 멤버가 보이스 채널에 있고 취침모드 역할이 있는 경우
+                                    await member.send(f"곧 취침 시간입니다. {notice_interval}분 남았습니다.")
+                            break  # 알림을 보낸 후 루프 종료
+                    
+                    # 해당 서버의 모든 멤버를 순회하여 보이스 채널 상태 확인
+                    for member in guild.members:
+                        if member.voice and any(role.name == "취침모드" for role in member.roles):  # 멤버가 보이스 채널에 있고 취침모드 역할이 있는 경우
+                            # 휴일 및 주말에 대한 조건 확인
+                            if (check_holiday and weekdays) or (not check_holiday and weekends):
+                                # 시간 비교
+                                if start_dt <= current_time <= end_dt:
+                                    await member.move_to(None)  # 보이스 채널에서 추방
+                                    await member.send("현재 취침 시간입니다. 보이스 채널에 접속할 수 없습니다.")
+        await asyncio.sleep(60)  # 1분 대기
 
 #================================================================================================
 #텍스트 채널 권한 부여 명령어
@@ -381,8 +533,8 @@ async def set_target_channel(ctx, target_channel: str):
             message = await ctx.send(f"__**{target_channel}**__ 채널 권한 부여를 위해 아래 이모지를 눌러주세요.")
             await message.add_reaction("✅")
             cursor.execute(f'''
-            INSERT INTO channel_access (server_id, access_channel_id, access_message_id, target_channel_id)
-            VALUES ('{ctx.guild.id}', '{ctx.channel.id}', '{message.id}', '{target_channel_id}')
+            INSERT INTO channel_access (server_id, access_channel_id, access_message_id, target_channel_id, target_channel_name)
+            VALUES ('{ctx.guild.id}', '{ctx.channel.id}', '{message.id}', '{target_channel_id}', '{target_channel}')
             ''')
             conn.commit()
             #명령어 메시지 삭제
@@ -628,8 +780,7 @@ async def on_member_join(member):
 
 
 #보이스 채널 떠날 때 이벤트(게스트 추방)
-@bot.event
-async def on_voice_state_update(member, before, after):
+async def ban_guest(member, before, after):
     user_roles = member.roles[1:] #사용자 역할 목록
     if discord.utils.get(member.guild.roles, name=guest_role[0]["name"]) not in user_roles:
         return
@@ -676,25 +827,38 @@ async def on_guild_channel_create(channel):
 
 @bot.command(name='명령어')
 async def help(ctx):
-    await ctx.send(
+    # 기본 도움말 메시지
+    help_message = (
         "!모집 : 모집 양식을 입력할 수 있는 버튼 메시지를 보냅니다.\n"
         "!모집종료 : 모집을 종료합니다.\n"
         "!명령어 : 도움말을 출력합니다.\n"
         "!모임 : 모집이 완료된 경우 모임을 시작합니다.(멤버 멘션)\n"
-        "!재전송 : 모집 메시지를 재전송합니다.\n\n"
-        "!게스트 : 접속 중인 음성 채널에 손님 초대 링크를 생성합니다.\n\n"
-        "관리자 명령어\n"
-        "!역할생성 : 봇에서 사용하는 역할을 생성합니다.\n"
-        "!역할삭제 : 봇에서 사용하는 역할을 삭제합니다.\n"
-        "!채널생성 [채널명] : 권한 부여 채널을 생성합니다.\n"
-        "!메시지생성 [대상채널명] : 대상 채널에 권한 부여 메시지를 생성합니다.\n"
-        "!메시지삭제 [대상채널명] : 대상 채널에 권한 부여 메시지를 삭제합니다."
+        "!재전송 : 모집 메시지를 재전송합니다.\n"
+        "!게스트 : 접속 중인 음성 채널에 손님 초대 링크를 생성합니다.\n"
+        "/취침모드설정 : 입력폼에 취침모드 설정을 입력합니다.\n"
+        "!취침모드켜기 : 취침모드를 켭니다.\n"
+        "!취침모드끄기 : 취침모드를 끕니다.\n"
     )
+
+    # 사용자가 관리자 권한을 가지고 있는지 확인
+    if ctx.author.guild_permissions.administrator:
+        help_message += (
+            "관리자 명령어\n"
+            "!역할생성 : 봇에서 사용하는 역할을 생성합니다.\n"
+            "!역할삭제 : 봇에서 사용하는 역할을 삭제합니다.\n"
+            "!채널생성 [채널명] : 권한 부여 채널을 생성합니다.\n"
+            "!메시지생성 [대상채널명] : 대상 채널에 권한 부여 메시지를 생성합니다.\n"
+            "!메시지삭제 [대상채널명] : 대상 채널에 권한 부여 메시지를 삭제합니다."
+        )
+
+    await ctx.author.send(help_message)
 
 
 @bot.event
 async def on_ready():
-    await bot.change_presence(activity=discord.Game(name="!명령어"))
+    bot.loop.create_task(check_sleep_mode())
+    await bot.change_presence(activity=discord.Game(name="/명령어"))
+    await bot.tree.sync()
     for guild in bot.guilds:
         invites = await guild.invites()
         invite_tracker[guild.id] = {invite.code: invite.uses for invite in invites}
