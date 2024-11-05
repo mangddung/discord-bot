@@ -403,48 +403,51 @@ async def on_voice_state_update(member, before, after):
                         await member.move_to(None)  # 보이스 채널에서 추방
                         await member.send("현재 취침 시간입니다. 보이스 채널에 접속할 수 없습니다.")
 
-@bot.tree.command(name="취침모드설정")
+@bot.tree.command(name="취침모드설정", description="취침 모드를 설정합니다.")
 async def set_sleep_mode(interaction: discord.Interaction):
     await interaction.response.send_modal(SleepModeModal())
 
-#취침모드켜기
-@bot.tree.command(name="취침모드켜기")
-async def activate_sleep_mode(ctx):
+#취침모드 켜기
+@bot.tree.command(name="취침모드켜기", description="취침 모드를 활성화합니다.")
+async def activate_sleep_mode(interaction: discord.Interaction):
     SLEEP_MODE_ROLE = voice_kick_roles[0]['name']
-    role = discord.utils.get(ctx.guild.roles, name=SLEEP_MODE_ROLE)
+    role = discord.utils.get(interaction.guild.roles, name=SLEEP_MODE_ROLE)
 
     if role is None:
-        await ctx.send('역할이 없습니다. 역할 생성 명령어를 사용한 후 이용해주세요.')
+        await interaction.response.send_message('역할이 없습니다. 역할 생성 명령어를 사용한 후 이용해주세요.', ephemeral=True)
         return
 
     # DB에서 설정값 확인
-    cursor.execute("SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE server_id = ?", (ctx.guild.id,))
+    cursor.execute("SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE server_id = ?", (interaction.guild.id,))
     result = cursor.fetchone()
 
     if result:
         start_time, end_time, weekdays, weekends = result
-        await ctx.author.send(f"{ctx.author.mention}, 현재 설정된 취침 모드 정보:\n"
-                       f"시작 시간: {start_time}\n"
-                       f"종료 시간: {end_time}\n"
-                       f"주중 설정: {'활성화' if weekdays else '비활성화'}\n"
-                       f"주말 설정: {'활성화' if weekends else '비활성화'}")
+        await interaction.user.send(f"{interaction.user.mention}, 현재 설정된 취침 모드 정보:\n"
+                                    f"시작 시간: {start_time}\n"
+                                    f"종료 시간: {end_time}\n"
+                                    f"주중 설정: {'활성화' if weekdays else '비활성화'}\n"
+                                    f"주말 설정: {'활성화' if weekends else '비활성화'}")
     else:
-        await ctx.author.send(f"{ctx.author.mention}, 취침 모드가 설정되어 있지 않습니다. "
-                       f"설정을 위해 `/취침모드설정` 명령어를 사용해주세요.")
-    
-    await ctx.author.add_roles(role)
+        await interaction.user.send(f"{interaction.user.mention}, 취침 모드가 설정되어 있지 않습니다. "
+                                    f"설정을 위해 `/취침모드설정` 명령어를 사용해주세요.")
+
+    await interaction.user.add_roles(role)
+    await interaction.response.send_message(f"{interaction.user.mention}, 취침 모드가 활성화되었습니다.", ephemeral=True)
+
 
 # 취침모드 끄기
-@bot.tree.command(name="취침모드끄기")
-async def deactivate_sleep_mode(ctx):
+@bot.tree.command(name="취침모드끄기", description="취침 모드를 비활성화합니다.")
+async def deactivate_sleep_mode(interaction: discord.Interaction):
     SLEEP_MODE_ROLE = voice_kick_roles[0]['name']
-    role = discord.utils.get(ctx.guild.roles, name=SLEEP_MODE_ROLE)
+    role = discord.utils.get(interaction.guild.roles, name=SLEEP_MODE_ROLE)
     if role is None:
-        ctx.send('역할이 없습니다. 역할생성 명령어를 사용한 후 이용해주세요.')
+        await interaction.response.send_message('역할이 없습니다. 역할생성 명령어를 사용한 후 이용해주세요.', ephemeral=True)
         return
+    
     if role:
-        await ctx.author.remove_roles(role)
-        await ctx.send(f"{ctx.author.mention}, 취침모드가 비활성화되었습니다.")
+        await interaction.user.remove_roles(role)
+        await interaction.response.send_message(f"{interaction.user.mention}, 취침모드가 비활성화되었습니다.", ephemeral=True)
 
 #1분마다 취침시간 확인 및 알림
 async def check_sleep_mode():
@@ -833,17 +836,17 @@ async def help(ctx):
         "!모집종료 : 모집을 종료합니다.\n"
         "!명령어 : 도움말을 출력합니다.\n"
         "!모임 : 모집이 완료된 경우 모임을 시작합니다.(멤버 멘션)\n"
-        "!재전송 : 모집 메시지를 재전송합니다.\n"
-        "!게스트 : 접속 중인 음성 채널에 손님 초대 링크를 생성합니다.\n"
+        "!재전송 : 모집 메시지를 재전송합니다.\n\n"
+        "!게스트 : 접속 중인 음성 채널에 손님 초대 링크를 생성합니다.\n\n"
         "/취침모드설정 : 입력폼에 취침모드 설정을 입력합니다.\n"
-        "!취침모드켜기 : 취침모드를 켭니다.\n"
-        "!취침모드끄기 : 취침모드를 끕니다.\n"
+        "/취침모드켜기 : 취침모드를 켭니다.\n"
+        "/취침모드끄기 : 취침모드를 끕니다.\n"
     )
 
     # 사용자가 관리자 권한을 가지고 있는지 확인
     if ctx.author.guild_permissions.administrator:
         help_message += (
-            "관리자 명령어\n"
+            "\n관리자 명령어\n"
             "!역할생성 : 봇에서 사용하는 역할을 생성합니다.\n"
             "!역할삭제 : 봇에서 사용하는 역할을 삭제합니다.\n"
             "!채널생성 [채널명] : 권한 부여 채널을 생성합니다.\n"
@@ -851,17 +854,17 @@ async def help(ctx):
             "!메시지삭제 [대상채널명] : 대상 채널에 권한 부여 메시지를 삭제합니다."
         )
 
-    await ctx.author.send(help_message)
+    await ctx.author.send(f"```{help_message}```")
 
 
 @bot.event
 async def on_ready():
-    bot.loop.create_task(check_sleep_mode())
-    await bot.change_presence(activity=discord.Game(name="/명령어"))
+    await bot.change_presence(activity=discord.Game(name="!명령어"))
     await bot.tree.sync()
     for guild in bot.guilds:
         invites = await guild.invites()
         invite_tracker[guild.id] = {invite.code: invite.uses for invite in invites}
     logging.info(f'{bot.user} has connected to Discord!')
+    bot.loop.create_task(check_sleep_mode())
 
 bot.run(Token)
