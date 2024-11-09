@@ -4,8 +4,8 @@ import json
 import discord
 from discord.ext import commands
 from discord.ui import Modal, View, Button, Select, TextInput
-from functions import modify_msg_form, reset_roles, remove_reaction
-from datetime import datetime, timedelta
+from functions import modify_msg_form, reset_roles, remove_reaction, check_holiday
+from datetime import datetime, timedelta, time
 import pytz
 from holidayskr import is_holiday
 import sqlite3
@@ -83,7 +83,7 @@ voice_kick_roles = [
     {"name": "음성차단", "color": discord.Color.default()},
 ]
 guest_role = [{"name": "손님", "color": discord.Color.default(), "hoist": True}]
-NOTICE_INTERVALS = [1, 5, 30]
+NOTICE_INTERVALS = [1, 5, 10, 30]
 
 dos_count = {}
 invite_tracker = {}
@@ -343,7 +343,7 @@ async def on_raw_reaction_remove(payload):
 #취침모드 기능
 #=========================================
 class SleepModeModal(discord.ui.Modal, title="취침모드 설정"):
-    weekdays_input = discord.ui.TextInput(label="요일 (평일, 주말, 모두)", placeholder="평일, 주말, 모두 중 하나 입력")
+    weekdays_input = discord.ui.TextInput(label="요일 (평일, 휴일, 매일)", placeholder="평일, 휴일, 매일 중 하나 입력")
     start_time_input = discord.ui.TextInput(label="시작 시간 (HH:MM)", placeholder="예: 23:00")
     end_time_input = discord.ui.TextInput(label="종료 시간 (HH:MM)", placeholder="예: 06:00")
 
@@ -357,7 +357,7 @@ class SleepModeModal(discord.ui.Modal, title="취침모드 설정"):
             datetime.strptime(start_time, "%H:%M")
             datetime.strptime(end_time, "%H:%M")
         except ValueError:
-            await interaction.response.send_message("시간 형식이 잘못되었습니다. HH:MM 형식으로 입력해주세요.", ephemeral=True)
+            await interaction.response.send_message("시간 형식이 잘못되었습니다. HH:MM 형식으로 입력해주세요. (24:00은 00:00으로 입력해주세요)", ephemeral=True)
             return
         
         # DB에 기존 데이터 삭제 후 새로운 데이터 삽입
@@ -367,41 +367,9 @@ class SleepModeModal(discord.ui.Modal, title="취침모드 설정"):
         cursor.execute('''REPLACE INTO sleep_mode (server_id, user_id, username, start_time, end_time, weekdays, weekends)
                              VALUES (?, ?, ?, ?, ?, ?, ?)''',
                           (str(interaction.guild.id), str(interaction.user.id), interaction.user.name, start_time, end_time,
-                           1 if weekdays in ["평일", "모두"] else 0, 1 if weekdays in ["주말", "모두"] else 0))
+                           1 if weekdays in ["평일", "매일"] else 0, 1 if weekdays in ["휴일", "매일"] else 0))
         conn.commit()
-        await interaction.response.send_message("취침모드가 설정되었습니다.", ephemeral=True)
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-    await ban_guest(member,before,after)
-    if after.channel is not None:  # 유저가 보이스 채널에 들어옴
-        role_names = [role.name for role in member.roles]
-        if voice_kick_roles[1]['name'] in role_names: #음성차단
-            await member.move_to(None)
-            print('집중모드로 인한 음성채널 추방')
-            return
-        current_time = datetime.now()
-        current_time_str = datetime.now().strftime("%Y-%m-%d")
-        today_day = datetime.today().weekday()
-        check_holiday = is_holiday(current_time_str) or today_day >= 5
-        if voice_kick_roles[0]['name'] in role_names: #취침모드
-            cursor.execute('''
-                SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE 
-                server_id = ? AND user_id = ?''',
-                (str(member.guild.id), str(member.id))
-                )
-            result = cursor.fetchone()
-            if result:
-                start_time, end_time, weekdays, weekends = result
-                if (not check_holiday and weekdays) or (check_holiday and weekends):
-                    # 시간 확인
-                    start_dt = datetime.strptime(start_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
-                    end_dt = datetime.strptime(end_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
-                    if end_dt < start_dt:
-                        end_dt += timedelta(days=1)  # 종료 시간이 다음 날일 경우
-                    if start_dt <= current_time <= end_dt:
-                        await member.move_to(None)  # 보이스 채널에서 추방
-                        await member.send("현재 취침 시간입니다. 보이스 채널에 접속할 수 없습니다.")
+        await interaction.response.send_message(f"{weekdays}, {start_time}~{end_time}으로 설정되었습니다.", ephemeral=True)
 
 @bot.tree.command(name="취침모드설정", description="취침 모드를 설정합니다.")
 async def set_sleep_mode(interaction: discord.Interaction):
@@ -410,6 +378,7 @@ async def set_sleep_mode(interaction: discord.Interaction):
 #취침모드 켜기
 @bot.tree.command(name="취침모드켜기", description="취침 모드를 활성화합니다.")
 async def activate_sleep_mode(interaction: discord.Interaction):
+    message = ""
     SLEEP_MODE_ROLE = voice_kick_roles[0]['name']
     role = discord.utils.get(interaction.guild.roles, name=SLEEP_MODE_ROLE)
 
@@ -423,18 +392,21 @@ async def activate_sleep_mode(interaction: discord.Interaction):
 
     if result:
         start_time, end_time, weekdays, weekends = result
-        await interaction.user.send(f"{interaction.user.mention}, 현재 설정된 취침 모드 정보:\n"
+        message +=(f"{interaction.user.mention}, 현재 설정된 취침 모드 정보:\n"
                                     f"시작 시간: {start_time}\n"
                                     f"종료 시간: {end_time}\n"
                                     f"주중 설정: {'활성화' if weekdays else '비활성화'}\n"
-                                    f"주말 설정: {'활성화' if weekends else '비활성화'}")
+                                    f"휴일 설정: {'활성화' if weekends else '비활성화'}")
     else:
-        await interaction.user.send(f"{interaction.user.mention}, 취침 모드가 설정되어 있지 않습니다. "
+        message +=(f"{interaction.user.mention}, 취침 모드가 설정되어 있지 않습니다. "
                                     f"설정을 위해 `/취침모드설정` 명령어를 사용해주세요.")
 
-    await interaction.user.add_roles(role)
-    await interaction.response.send_message(f"{interaction.user.mention}, 취침 모드가 활성화되었습니다.", ephemeral=True)
-
+    try:
+        await interaction.user.add_roles(role)
+        message += "\n취침 모드가 활성화되었습니다."
+    except:
+        message += "\n취침 모드가 활성을 실패했습니다."
+    await interaction.response.send_message(message,ephemeral=True)
 
 # 취침모드 끄기
 @bot.tree.command(name="취침모드끄기", description="취침 모드를 비활성화합니다.")
@@ -449,19 +421,66 @@ async def deactivate_sleep_mode(interaction: discord.Interaction):
         await interaction.user.remove_roles(role)
         await interaction.response.send_message(f"{interaction.user.mention}, 취침모드가 비활성화되었습니다.", ephemeral=True)
 
+@bot.event
+async def on_voice_state_update(member, before, after):
+    await ban_guest(member,before,after)
+    if after.channel is not None:  # 유저가 보이스 채널에 들어옴
+        role_names = [role.name for role in member.roles]
+        if voice_kick_roles[1]['name'] in role_names: #음성차단 역할
+            await member.move_to(None)
+            logging.info(f"{member.nick}({member.id})님 음성차단 추방")
+            return
+        current_time = datetime.now(tz)
+        if voice_kick_roles[0]['name'] in role_names: #취침모드
+            cursor.execute('''
+                SELECT * FROM sleep_mode WHERE 
+                server_id = ? AND user_id = ?''',
+                (str(member.guild.id), str(member.id))
+                )
+            result = cursor.fetchone()
+            if result:
+                    server_id, user_id, username, start_time, end_time, weekdays, weekends = result
+                    
+                    #보이스 채널 접속 및 역할 확인
+                    if not member.voice or not any(role.name == voice_kick_roles[0]['name'] for role in member.roles):
+                        return
+                    
+                    # 현재 시간에 따라 시작 및 종료 시간 설정
+                    start_dt = tz.localize(datetime.strptime(start_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day))
+                    end_dt = tz.localize(datetime.strptime(end_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day))
+
+                    if end_dt < start_dt:
+                        if time(0,0) <= current_time.time() <= end_dt.time():
+                            start_dt -= timedelta(days=1)
+                        else:
+                            end_dt += timedelta(days=1) 
+                    try:
+                        holiday = check_holiday(end_dt)  # end_dt 날짜에 따라 휴일 확인
+                    except:
+                        logging.error(f"날짜 형식 오류 발생 : {result}")
+                        return
+
+                    if(weekdays == holiday) and not (weekdays and weekends):
+                        return
+
+                    #설정한 시간 사이 이면 추방
+                    if (start_dt <= current_time <= end_dt):
+                        await member.move_to(None)  # 보이스 채널에서 추방
+                        await member.send("현재 취침 시간입니다. 보이스 채널에 접속할 수 없습니다.")
+                        logging.info(f"{member.nick}({member.id})님 취침모드 추방")
+                        return
+                    
 #1분마다 취침시간 확인 및 알림
 async def check_sleep_mode():
     await bot.wait_until_ready()  # 봇이 준비될 때까지 대기
     while not bot.is_closed():
-        current_time = datetime.now()  # 현재 시간
-        current_time_str = current_time.strftime("%Y-%m-%d")
+        current_time = datetime.now(tz)  # 현재 시간
 
         # DB에서 설정값 가져오기
         cursor.execute("SELECT server_id FROM sleep_mode")
         server_ids = cursor.fetchall()
         
         if server_ids:
-            check_holiday = is_holiday(current_time_str)  # 현재 날짜에 따라 휴일 확인
             # 서버 확인
             for server in server_ids:
                 guild = bot.get_guild(int(server[0]))  # server_id를 사용하여 guild 객체 가져오기
@@ -469,40 +488,49 @@ async def check_sleep_mode():
                     continue  # 해당 서버가 존재하지 않으면 다음으로 넘어감
 
                 cursor.execute('''
-                    SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE 
+                    SELECT user_id, start_time, end_time, weekdays, weekends FROM sleep_mode WHERE 
                     server_id = ?''', (str(server[0]),))
                 results = cursor.fetchall()  # 여러 결과를 가져옴
                 
                 # 각 설정에 대해 처리
                 for row in results:
-                    start_time, end_time, weekdays, weekends = row
+                    user_id, start_time, end_time, weekdays, weekends = row
+                    
+                    member = guild.get_member(int(user_id))
+                    
+                    #보이스 채널 접속 및 역할 확인
+                    if not member.voice or not any(role.name == voice_kick_roles[0]['name'] for role in member.roles):
+                        continue
                     
                     # 현재 시간에 따라 시작 및 종료 시간 설정
-                    start_dt = datetime.strptime(start_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
-                    end_dt = datetime.strptime(end_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day)
+                    start_dt = tz.localize(datetime.strptime(start_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day))
+                    end_dt = tz.localize(datetime.strptime(end_time, "%H:%M").replace(year=current_time.year, month=current_time.month, day=current_time.day))
 
                     if end_dt < start_dt:
-                        end_dt += timedelta(days=1)  # 종료 시간이 다음 날일 경우
-                    
+                        if time(0,0) <= current_time.time() <= end_dt.time():
+                            start_dt -= timedelta(days=1)
+                        else:
+                            end_dt += timedelta(days=1) 
+
+                    holiday = check_holiday(end_dt)  # end_dt 날짜에 따라 휴일 확인
+                    if(weekdays == holiday) and not (weekdays and weekends):
+                        continue
+
+                    #설정한 시간 사이 이면 추방
+                    if (start_dt <= current_time <= end_dt):
+                        await member.move_to(None)  # 보이스 채널에서 추방
+                        await member.send("현재 취침 시간입니다. 보이스 채널에 접속할 수 없습니다.")
+                        logging.info(f"{member.nick}({member.id})님 취침모드 추방")
+                        continue
+
                     # 알림 보내기
                     for notice_interval in NOTICE_INTERVALS:
                         notice_time = start_dt - timedelta(minutes=notice_interval)
                         # 현재 시간이 알림 시간에 해당하면 알림을 보냄
                         if current_time >= notice_time and current_time < (notice_time + timedelta(seconds=59)):
-                            for member in guild.members:
-                                if member.voice and any(role.name == "취침모드" for role in member.roles):  # 멤버가 보이스 채널에 있고 취침모드 역할이 있는 경우
-                                    await member.send(f"곧 취침 시간입니다. {notice_interval}분 남았습니다.")
-                            break  # 알림을 보낸 후 루프 종료
-                    
-                    # 해당 서버의 모든 멤버를 순회하여 보이스 채널 상태 확인
-                    for member in guild.members:
-                        if member.voice and any(role.name == "취침모드" for role in member.roles):  # 멤버가 보이스 채널에 있고 취침모드 역할이 있는 경우
-                            # 휴일 및 주말에 대한 조건 확인
-                            if (check_holiday and weekdays) or (not check_holiday and weekends):
-                                # 시간 비교
-                                if start_dt <= current_time <= end_dt:
-                                    await member.move_to(None)  # 보이스 채널에서 추방
-                                    await member.send("현재 취침 시간입니다. 보이스 채널에 접속할 수 없습니다.")
+                            if member.voice and any(role.name == voice_kick_roles[0]['name'] for role in member.roles):  # 멤버가 보이스 채널에 있고 취침모드 역할이 있는 경우
+                                await member.send(f"곧 취침 시간입니다. {notice_interval}분 남았습니다.")
+                                logging.info(f"{member.nick}({member.id})님에게 {notice_interval}분전 메세지 전송")          
         await asyncio.sleep(60)  # 1분 대기
 
 #================================================================================================
