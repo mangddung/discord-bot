@@ -1,4 +1,6 @@
 import discord
+from holidayskr import is_holiday
+from datetime import datetime
 
 async def modify_msg_form(roles, message):  
     role_name = [role["name"] for role in roles]
@@ -22,3 +24,10 @@ async def reset_roles(roles, ctx):
 
 async def remove_reaction(message,member, emoji):
     await message.remove_reaction(emoji, member)
+
+def check_holiday(dt):
+    if not isinstance(dt, datetime):
+        raise TypeError("올바른 날짜 형식이 아닙니다.")
+    holiday = is_holiday(dt.strftime("%Y-%m-%d")) #공휴일 확인
+    week = dt.weekday() >= 5 #주말확인
+    return holiday or week
