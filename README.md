@@ -79,7 +79,7 @@ Typecast.ai tts 기능 추가
 
 https://biz.typecast.ai/org/overview
 
-위 링크에 접속해서 캐틱터 변경시 tts_character 변수에서 변경한 캐릭터 주석 해제, 나머지 캐릭터 주석 처리
+위 링크에 접속해서 캐틱터 변경 후 /settts 명령어로 동기화
 
 명령어
 ----
