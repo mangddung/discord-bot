@@ -1,4 +1,4 @@
-from dico_token import Token
+from dico_token import Token, API_TOKEN
 import asyncio
 import json
 import discord
@@ -10,6 +10,7 @@ import pytz
 from holidayskr import is_holiday
 import sqlite3
 import logging
+import aiohttp
 
 logging.basicConfig(
     level=logging.DEBUG,  # 필요한 로그 레벨로 설정합니다. 예: DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -856,6 +857,149 @@ async def on_guild_channel_create(channel):
         except:
             logging.error(f'{role.name} 역할의 {channel.name} 음성 채널 권한 거부 실패')
 
+#typecast tts 기능
+#===============================================================================================
+# FFmpeg 경로
+# ffmpeg_path = "C:\\ffmpeg\\bin\\ffmpeg.exe"  #윈도우
+ffmpeg_path = 'ffmpeg' #리눅스
+
+ffmpeg_source = []
+ffmpeg_options = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+        'options': '-vn'
+    }
+
+tts_character = {
+    #이름 : [캐릭터ID, normal, angry, sad, happy]
+    # "아리" : ["6047863af12456064b35354e",4,0,0,0],
+    "삐뚤어진 찬구" : ["6010088f885570093ad24d53",4,4,4,4],
+    # "호빈이" : ["5ffda49bcba8f6d3d46fc447",4,0,0,0],
+    # "미스타 변사" : ["603fa172a669dfd23f450abd",4,0,3,0],
+    # "발키리" : ["60478557f12456064b353409",4,4,4,4],
+    # "아봉" : ["61532c5aed9bfa8b54d5dff6",4,0,0,0],
+    # "순이" : ["60ad0841061ee28740ec2e1c",4,4,4,4],
+    # "자바바" : ["62a89753894c1004cb577d04",3,0,0,0],
+    # "하준" : ["60db308484130840f23e6ca0",4,4,3,4],
+    # "보라" : ["618203f635ea62f8574c7d8a",3,0,0,0],
+}
+character_key = list(tts_character.keys())[0]
+character_data = list(tts_character.values())[0]
+
+emotion_tone_preset = ['normal','angry','sad','happy']
+
+#min,default,max
+tempo = [0.5,1,0,2.0]
+volume = [50,100,200]
+pitch = [-12,0,12]
+
+class ttsModal(discord.ui.Modal, title=f"tts {character_key} 목소리"):
+    def __init__(self, character_id: str):
+        super().__init__()
+
+        self.text_input = discord.ui.TextInput(label="tts 텍스트 입력",placeholder="텍스트 입력")
+        self.character_id = character_id
+
+        self.add_item(self.text_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        text = self.text_input.value
+        character =  self.character_id
+        await interaction.response.send_message(f"tts요청을 보냈습니다.", ephemeral=True)
+        speak_v2_url = await tts_request(character,text)
+        if not speak_v2_url:
+            await interaction.followup.send(f"캐릭터 보이스 생성 실패", ephemeral=True)
+        attempt = 0
+        while attempt<5:
+            audio_url = await tts_speak_request(speak_v2_url)
+            if not audio_url:
+                await asyncio.sleep(1)
+                attempt+=1
+                continue
+            await interaction.followup.send(f"tts를 재생합니다.", ephemeral=True)
+            bot_voice_channel = interaction.guild.voice_client
+            voice_channel = interaction.user.voice.channel
+            if not bot_voice_channel:
+                voice_client = await voice_channel.connect()
+            else:
+                voice_client = bot_voice_channel
+
+            if not voice_client.is_playing():
+                voice_client.play(discord.FFmpegPCMAudio(executable=ffmpeg_path, source=audio_url, **ffmpeg_options),
+                                after=lambda e: bot.loop.create_task(leave_after_play(voice_client)))
+            return
+        
+        if attempt>=5:
+            await interaction.followup.send(f"보이스 파일 생성 실패", ephemeral=True)
+
+# async def tts_character_view(tts_character):
+#     view = discord.ui.View()
+#     options = [
+#         discord.SelectOption(label=name, value=data[0])
+#         for name, data in tts_character.items()
+#     ]
+#     character_dropdwon = discord.ui.Select(placeholder="캐릭터를 선택해주세요.",options=options,min_values=1,max_values=1)
+
+#     async def character_dropdwon_callback(interaction: discord.Interaction):
+#         select_value = character_dropdwon.values[0]
+#         await interaction.response.send_modal(ttsModal(select_value))
+
+#     character_dropdwon.callback = character_dropdwon_callback
+#     view.add_item(character_dropdwon)
+
+#     return view
+
+async def tts_request(character,text):
+    url = "https://typecast.ai/api/speak"
+    payload = json.dumps({
+        "actor_id": character,
+        "text": text,
+        "lang": "auto",
+        "tempo": tempo[1],
+        "volume": volume[1],
+        "pitch": pitch[1],
+        "xapi_hd": True,
+        "max_seconds": 60,
+        "model_version": "latest",
+        "xapi_audio_format": "wav"
+    })
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f"Bearer {API_TOKEN}"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, data=payload) as response:
+            if response.status == 200:
+                data = await response.json()  # JSON 응답을 파싱
+                speak_v2_url = data.get("result", {}).get("speak_v2_url")
+                if not speak_v2_url:
+                    return None
+                return speak_v2_url
+            
+async def tts_speak_request(speak_v2_url):
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {API_TOKEN}"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.get(speak_v2_url, headers=headers) as response:
+            if response.status == 200:
+                data = await response.json()  # JSON 응답을 파싱
+                auido_url = data.get("result", {}).get("audio_download_url")
+                return auido_url
+            else:
+                return None
+
+async def leave_after_play(voice_client):
+    await voice_client.disconnect()
+
+@bot.tree.command(name="tts", description="음성채널에서 tts를 읽습니다.")
+async def tts_form(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        await interaction.response.send_message("음성채널에 접속해주세요.",ephemeral=True)
+        return
+    await interaction.response.send_modal(ttsModal(character_data[0]))
+
+#============================================================================
 @bot.command(name='명령어')
 async def help(ctx):
     # 기본 도움말 메시지
