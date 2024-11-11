@@ -222,7 +222,6 @@ async def meetup(ctx):
     members_role_1 = [member.mention for member in target_role[0].members] if target_role[0].members else []
     temp = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
     await ctx.send(f"{temp}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
-    print('모집 완료')
 
 @bot.command(name='재전송')
 #원래 메시지를 삭제하고 다시 생성
@@ -239,7 +238,6 @@ async def resend(ctx):
     await msg.add_reaction("❌")
     recruit_message_id = msg.id
     edit_message = await modify_msg_form(roles, msg)
-    print(edit_message)
     await msg.edit(content=f"{origin_message}{edit_message}")
 
 @bot.event
@@ -269,12 +267,10 @@ async def on_raw_reaction_add(payload):
             await remove_reaction(message, member, '❌')
             role = discord.utils.get(message.guild.roles, name=roles[0]["name"])
             await member.add_roles(role)
-            print(f'{member.display_name}님이 모집에 참여를 선택하셨습니다.')
         elif str(payload.emoji) == '❌':
             await remove_reaction(message, member, '✅')
             role = discord.utils.get(message.guild.roles, name=roles[1]["name"])
             await member.add_roles(role)
-            print(f'{member.display_name}님이 모집에 불참을 선택하셨습니다.')
         else:
             await remove_reaction(message, member, str(payload.emoji))
         await asyncio.sleep(0.5)
@@ -289,7 +285,6 @@ async def on_raw_reaction_add(payload):
             else:
                 role1 = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
             await channel.send(f"{role1}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
-            print('모집 완료')
     #권한 부여 메시지
     else:
         if str(payload.emoji) == '✅':
@@ -316,11 +311,9 @@ async def on_raw_reaction_remove(payload):
         if str(payload.emoji) == '✅':
             role = discord.utils.get(message.guild.roles, name=roles[0]["name"])
             await member.remove_roles(role)
-            print(f'{member.display_name}님이 모집 참여를 취소하셨습니다.')
         elif str(payload.emoji) == '❌':
             role = discord.utils.get(message.guild.roles, name=roles[1]["name"])
             await member.remove_roles(role)
-            print(f'{member.display_name}님이 모집 불참을 취소하셨습니다.')
         await asyncio.sleep(0.5)
         edit_message = await modify_msg_form(roles, message)
         await message.edit(content=f"{origin_message}{edit_message}")
@@ -945,8 +938,6 @@ async def set_chracter(interaction: discord.Interaction):
                 data = await response.json()
                 selected_character_name = data['result'][0]['name']['ko']
                 selected_characeter_data = data['result'][0]['actor_id']
-                print(selected_characeter_data)
-                print(selected_character_name)
                 await interaction.response.send_message(f"{selected_character_name} 캐릭터로 설정되었습니다.", ephemeral=True)
                 tts_command = bot.tree.get_command('tts')
                 if tts_command:
