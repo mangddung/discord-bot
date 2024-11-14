@@ -26,7 +26,7 @@ class KSTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         dt = self.converter(record.created)
         # yyyy-mm-dd-hh-mm-ss 형식으로 시간 포맷 지정
-        s = dt.strftime("%Y-%m-%d %H:%M:%S")
+        s = dt.strftime("%Y-%m-%d %H:%M:%S") + f",{dt.microsecond // 1000:03d}"
         return s
 
 # Formatter를 적용한 핸들러 설정
