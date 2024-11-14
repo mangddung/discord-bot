@@ -12,16 +12,40 @@ import sqlite3
 import logging
 import aiohttp
 
+tz = pytz.timezone('Asia/Seoul')
+
+# 로그 설정
+#==============
+# 한국 시간대를 Formatter 설정
+class KSTFormatter(logging.Formatter):
+    def converter(self, timestamp):
+        # KST 시간대로 변환
+        dt = datetime.fromtimestamp(timestamp, tz=tz)
+        return dt
+
+    def formatTime(self, record, datefmt=None):
+        dt = self.converter(record.created)
+        # yyyy-mm-dd-hh-mm-ss 형식으로 시간 포맷 지정
+        s = dt.strftime("%Y-%m-%d %H:%M:%S")
+        return s
+
+# Formatter를 적용한 핸들러 설정
+file_handler = logging.FileHandler("discord_bot.log")
+stream_handler = logging.StreamHandler()
+
+formatter = KSTFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
+
+# 기본 로그 설정
 logging.basicConfig(
-    level=logging.DEBUG,  # 필요한 로그 레벨로 설정합니다. 예: DEBUG, INFO, WARNING, ERROR, CRITICAL
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("discord_bot.log"),  # 로그 파일 이름을 지정합니다.
-        logging.StreamHandler()  # 콘솔에 로그를 출력하려면 이 핸들러를 추가합니다.
-    ]
+    level=logging.DEBUG,  # 필요한 로그 레벨로 설정
+    handlers=[file_handler, stream_handler]
 )
 
 logger = logging.getLogger(__name__)
+
+#============
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -33,8 +57,6 @@ intents.guild_messages = True  # 메시지 관련 이벤트를 감지하도록 �
 intents.guild_reactions = True  # 리액션 관련 이벤트를 감지하도록 합니다
 
 bot = commands.Bot(command_prefix='!', intents=intents)
-
-tz = pytz.timezone('Asia/Seoul')
 
 conn = sqlite3.connect('recruit_bot.db')
 cursor = conn.cursor()
@@ -471,7 +493,7 @@ async def check_sleep_mode():
         current_time = datetime.now(tz)  # 현재 시간
 
         # DB에서 설정값 가져오기
-        cursor.execute("SELECT server_id FROM sleep_mode")
+        cursor.execute("SELECT DISTINCT server_id FROM sleep_mode")
         server_ids = cursor.fetchall()
         
         if server_ids:
@@ -489,7 +511,7 @@ async def check_sleep_mode():
                 # 각 설정에 대해 처리
                 for row in results:
                     user_id, start_time, end_time, weekdays, weekends = row
-                    
+
                     member = guild.get_member(int(user_id))
                     
                     #보이스 채널 접속 및 역할 확인
@@ -522,9 +544,8 @@ async def check_sleep_mode():
                         notice_time = start_dt - timedelta(minutes=notice_interval)
                         # 현재 시간이 알림 시간에 해당하면 알림을 보냄
                         if current_time >= notice_time and current_time < (notice_time + timedelta(seconds=59)):
-                            if member.voice and any(role.name == voice_kick_roles[0]['name'] for role in member.roles):  # 멤버가 보이스 채널에 있고 취침모드 역할이 있는 경우
-                                await member.send(f"곧 취침 시간입니다. {notice_interval}분 남았습니다.")
-                                logging.info(f"{member.nick}({member.id})님에게 {notice_interval}분전 메세지 전송")          
+                            await member.send(f"곧 취침 시간입니다. {notice_interval}분 남았습니다.")
+                            logging.info(f"{member.nick}({member.id})님에게 {notice_interval}분전 메세지 전송")          
         await asyncio.sleep(60)  # 1분 대기
 
 #================================================================================================
