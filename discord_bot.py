@@ -403,7 +403,7 @@ async def activate_sleep_mode(interaction: discord.Interaction):
         return
 
     # DB에서 설정값 확인
-    cursor.execute("SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE server_id = ?", (interaction.guild.id,))
+    cursor.execute("SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE user_id = ?", (interaction.user.id,))
     result = cursor.fetchone()
 
     if result:
@@ -927,77 +927,99 @@ async def tts_request(character,text):
     })
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, data=payload) as response:
-            if response.status == 200:
+            try:
                 data = await response.json()  # JSON 응답을 파싱
+                print(data)
+            except Exception as e:
+                print(f"JSON 파싱 실패: {e}")
+                print(f"응답 상태 코드: {response.status}")
+                print(f"응답 본문: {await response.text()}")
+                return None
+            
+            if response.status == 200:
                 speak_v2_url = data.get("result", {}).get("speak_v2_url")
                 if not speak_v2_url:
                     return None
                 return speak_v2_url
+            else:
+                print(f'tts request error : {data}')
+                return None
             
 async def tts_speak_request(speak_v2_url):
     async with aiohttp.ClientSession() as session:
         async with session.get(speak_v2_url, headers=headers) as response:
-            if response.status == 200:
+            try:
                 data = await response.json()  # JSON 응답을 파싱
+                print(data)
+            except Exception as e:
+                print(f"JSON 파싱 실패: {e}")
+                print(f"응답 상태 코드: {response.status}")
+                print(f"응답 본문: {await response.text()}")
+                return None
+            
+            if response.status == 200:
                 auido_url = data.get("result", {}).get("audio_download_url")
                 return auido_url
             else:
+                print(f'tts speak request error : {data}')
                 return None
 
 async def leave_after_play(voice_client):
     await voice_client.disconnect()
 
-@bot.tree.command(name="settts", description="tts 캐릭터 설정을 동기화합니다.")
-@commands.has_permissions(administrator=True)
-async def set_chracter(interaction: discord.Interaction):
-    url = "https://typecast.ai/api/actor"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                global selected_character_name
-                global selected_characeter_data
-                data = await response.json()
-                selected_character_name = data['result'][0]['name']['ko']
-                selected_characeter_data = data['result'][0]['actor_id']
-                await interaction.response.send_message(f"{selected_character_name} 캐릭터로 설정되었습니다.", ephemeral=True)
-                tts_command = bot.tree.get_command('tts')
-                if tts_command:
-                    tts_command.description = f"음성채널에서 tts({selected_character_name})를 읽습니다."
-                    await bot.tree.sync()  # 동기화하여 서버에 반영
-            else:
-                await interaction.response.send_message("서버 통신 실패")
+# tts 사용량 제한으로 기능 비활성
+# @bot.tree.command(name="settts", description="tts 캐릭터 설정을 동기화합니다.")
+# @commands.has_permissions(administrator=True)
+# async def set_chracter(interaction: discord.Interaction):
+#     url = "https://typecast.ai/api/actor"
+#     async with aiohttp.ClientSession() as session:
+#         async with session.get(url, headers=headers) as response:
+#             if response.status == 200:
+#                 global selected_character_name
+#                 global selected_characeter_data
+#                 data = await response.json()
+#                 selected_character_name = data['result'][0]['name']['ko']
+#                 selected_characeter_data = data['result'][0]['actor_id']
+#                 await interaction.response.send_message(f"{selected_character_name} 캐릭터로 설정되었습니다.", ephemeral=True)
+#                 tts_command = bot.tree.get_command('tts')
+#                 if tts_command:
+#                     tts_command.description = f"음성채널에서 tts({selected_character_name})를 읽습니다."
+#                     await bot.tree.sync()  # 동기화하여 서버에 반영
+#             else:
+#                 await interaction.response.send_message("서버 통신 실패")
 
-@bot.tree.command(name="tts", description=f"음성채널에서 tts({selected_character_name})를 읽습니다.")
-async def tts_form(interaction: discord.Interaction, text:str):
-    if not interaction.user.voice:
-        await interaction.response.send_message("음성채널에 접속해주세요.",ephemeral=True)
-        return
-    await interaction.response.send_message(f"tts요청을 보냈습니다.", ephemeral=True)
-    speak_v2_url = await tts_request(selected_characeter_data,text)
-    if not speak_v2_url:
-        await interaction.followup.send(f"캐릭터 보이스 생성 실패", ephemeral=True)
-    attempt = 0
-    while attempt<5:
-        audio_url = await tts_speak_request(speak_v2_url)
-        if not audio_url:
-            await asyncio.sleep(1)
-            attempt+=1
-            continue
-        await interaction.followup.send(f"tts를 재생합니다.", ephemeral=True)
-        bot_voice_channel = interaction.guild.voice_client
-        voice_channel = interaction.user.voice.channel
-        if not bot_voice_channel:
-            voice_client = await voice_channel.connect()
-        else:
-            voice_client = bot_voice_channel
+# @bot.tree.command(name="tts", description=f"음성채널에서 tts({selected_character_name})를 읽습니다.")
+# async def tts_form(interaction: discord.Interaction, text:str):
+#     if not interaction.user.voice:
+#         await interaction.response.send_message("음성채널에 접속해주세요.",ephemeral=True)
+#         return
+#     speak_v2_url = await tts_request(selected_characeter_data,text)
+#     print(speak_v2_url)
+#     if not speak_v2_url:
+#         await interaction.response.send_message(f"캐릭터 보이스 생성 실패", ephemeral=True)
+#         return
+#     attempt = 0
+#     while attempt<5:
+#         audio_url = await tts_speak_request(speak_v2_url)
+#         if not audio_url:
+#             await asyncio.sleep(1)
+#             attempt+=1
+#             continue
+#         await interaction.response.send_message(f"tts를 재생합니다.", ephemeral=True)
+#         bot_voice_channel = interaction.guild.voice_client
+#         voice_channel = interaction.user.voice.channel
+#         if not bot_voice_channel:
+#             voice_client = await voice_channel.connect()
+#         else:
+#             voice_client = bot_voice_channel
 
-        if not voice_client.is_playing():
-            voice_client.play(discord.FFmpegPCMAudio(executable=ffmpeg_path, source=audio_url, **ffmpeg_options),
-                            after=lambda e: bot.loop.create_task(leave_after_play(voice_client)))
-        return
+#         if not voice_client.is_playing():
+#             voice_client.play(discord.FFmpegPCMAudio(executable=ffmpeg_path, source=audio_url, **ffmpeg_options),
+#                             after=lambda e: bot.loop.create_task(leave_after_play(voice_client)))
+#         return
     
-    if attempt>=5:
-        await interaction.followup.send(f"보이스 파일 생성 실패", ephemeral=True)
+#     if attempt>=5:
+#         await interaction.response.send_message(f"보이스 파일 생성 실패", ephemeral=True)
 
 #============================================================================
 @bot.command(name='명령어')
