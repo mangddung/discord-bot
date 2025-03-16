@@ -17,4 +17,4 @@ COPY . .
 RUN apt-get update && apt-get install -y ffmpeg
 
 # 컨테이너 시작 시 실행할 명령어
-CMD ["python3", "discord_bot.py"]
+CMD ["python3", "main.py"]

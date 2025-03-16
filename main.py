@@ -1,19 +1,36 @@
-from dico_token import Token, API_TOKEN
+import os
+import sys
+import json
+
 import asyncio
 import json
 import discord
+from discord import app_commands
 from discord.ext import commands
 from discord.ui import Modal, View, Button, Select, TextInput
-from functions import modify_msg_form, reset_roles, remove_reaction, check_holiday
 from datetime import datetime, timedelta, time
 import pytz
 from holidayskr import is_holiday
 import sqlite3
 import logging
 import aiohttp
-
+from dotenv import load_dotenv
+load_dotenv()
 tz = pytz.timezone('Asia/Seoul')
 
+from functions import modify_msg_form, reset_roles, remove_reaction, check_holiday
+from utils.database import get_connection, initialize_database
+
+if not os.path.isfile(f"{os.path.realpath(os.path.dirname(__file__))}/config.json"):
+    sys.exit("'config.json' not found! Please add it and try again.")
+else:
+    with open(f"{os.path.realpath(os.path.dirname(__file__))}/config.json") as file:
+        config = json.load(file)
+
+discord_token = os.getenv('DISCORD_TOKEN')
+typecast_api =os.getenv('TYPECAST_API')
+bot_prefix = config["prefix"]
+db_name = os.getenv('DB_NAME')
 # 로그 설정
 #==============
 # 한국 시간대를 Formatter 설정
@@ -53,48 +70,17 @@ intents.guilds = True
 intents.members = True
 intents.reactions = True
 intents.voice_states = True
-intents.guild_messages = True  # 메시지 관련 이벤트를 감지하도록 합니다
-intents.guild_reactions = True  # 리액션 관련 이벤트를 감지하도록 합니다
+intents.guild_messages = True
+intents.guild_reactions = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix=bot_prefix, intents=intents)
 
-conn = sqlite3.connect('recruit_bot.db')
+# 데이터베이스
+#========================
+
+conn = get_connection()
 cursor = conn.cursor()
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS channel_access (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    server_id INTEGER NOT NULL,
-    access_channel_id INTEGER NOT NULL,
-    access_message_id INTEGER NOT NULL,
-    target_channel_id INTEGER NOT NULL,
-    target_channel_name TEXT NOT NULL
-)
-''')
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS guest_invite_code (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    server_id INTEGER NOT NULL,
-    invite_code TEXT NOT NULL,
-    inviter_id INTEGER NOT NULL,
-    inviter_name TEXT NOT NULL,
-    target_channel_id INTEGER NOT NULL,
-    target_user_id INTEGER,
-    created_at TIMESTAMP,
-    joined_at TIMESTAMP
-)
-''')
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS sleep_mode (
-    server_id TEXT, 
-    user_id TEXT,
-    username TEXT,
-    start_time TEXT,
-    end_time TEXT, 
-    weekdays INTEGER, 
-    weekends INTEGER
-)
-''')
-conn.commit()
+#========================
 
 recruit_status = False
 roles = [
@@ -358,84 +344,6 @@ async def on_raw_reaction_remove(payload):
 
 #취침모드 기능
 #=========================================
-class SleepModeModal(discord.ui.Modal, title="취침모드 설정"):
-    weekdays_input = discord.ui.TextInput(label="요일 (평일, 휴일, 매일)", placeholder="평일, 휴일, 매일 중 하나 입력")
-    start_time_input = discord.ui.TextInput(label="시작 시간 (HH:MM)", placeholder="예: 23:00")
-    end_time_input = discord.ui.TextInput(label="종료 시간 (HH:MM)", placeholder="예: 06:00")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        weekdays = self.weekdays_input.value
-        start_time = self.start_time_input.value
-        end_time = self.end_time_input.value
-
-        # 시간 형식 확인
-        try:
-            datetime.strptime(start_time, "%H:%M")
-            datetime.strptime(end_time, "%H:%M")
-        except ValueError:
-            await interaction.response.send_message("시간 형식이 잘못되었습니다. HH:MM 형식으로 입력해주세요. (24:00은 00:00으로 입력해주세요)", ephemeral=True)
-            return
-        
-        # DB에 기존 데이터 삭제 후 새로운 데이터 삽입
-        cursor.execute('''DELETE FROM sleep_mode WHERE server_id = ? AND user_id = ?''',
-                       (str(interaction.guild.id), str(interaction.user.id)))
-        # DB에 저장 또는 업데이트
-        cursor.execute('''REPLACE INTO sleep_mode (server_id, user_id, username, start_time, end_time, weekdays, weekends)
-                             VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                          (str(interaction.guild.id), str(interaction.user.id), interaction.user.name, start_time, end_time,
-                           1 if weekdays in ["평일", "매일"] else 0, 1 if weekdays in ["휴일", "매일"] else 0))
-        conn.commit()
-        await interaction.response.send_message(f"{weekdays}, {start_time}~{end_time}으로 설정되었습니다.", ephemeral=True)
-
-@bot.tree.command(name="취침모드설정", description="취침 모드를 설정합니다.")
-async def set_sleep_mode(interaction: discord.Interaction):
-    await interaction.response.send_modal(SleepModeModal())
-
-#취침모드 켜기
-@bot.tree.command(name="취침모드켜기", description="취침 모드를 활성화합니다.")
-async def activate_sleep_mode(interaction: discord.Interaction):
-    message = ""
-    SLEEP_MODE_ROLE = voice_kick_roles[0]['name']
-    role = discord.utils.get(interaction.guild.roles, name=SLEEP_MODE_ROLE)
-
-    if role is None:
-        await interaction.response.send_message('역할이 없습니다. 역할 생성 명령어를 사용한 후 이용해주세요.', ephemeral=True)
-        return
-
-    # DB에서 설정값 확인
-    cursor.execute("SELECT start_time, end_time, weekdays, weekends FROM sleep_mode WHERE user_id = ?", (interaction.user.id,))
-    result = cursor.fetchone()
-
-    if result:
-        start_time, end_time, weekdays, weekends = result
-        message +=(f"{interaction.user.mention}, 현재 설정된 취침 모드 정보:\n"
-                                    f"시작 시간: {start_time}\n"
-                                    f"종료 시간: {end_time}\n"
-                                    f"주중 설정: {'활성화' if weekdays else '비활성화'}\n"
-                                    f"휴일 설정: {'활성화' if weekends else '비활성화'}")
-    else:
-        message +=(f"{interaction.user.mention}, 취침 모드가 설정되어 있지 않습니다. "
-                                    f"설정을 위해 `/취침모드설정` 명령어를 사용해주세요.")
-
-    try:
-        await interaction.user.add_roles(role)
-        message += "\n취침 모드가 활성화되었습니다."
-    except:
-        message += "\n취침 모드가 활성을 실패했습니다."
-    await interaction.response.send_message(message,ephemeral=True)
-
-# 취침모드 끄기
-@bot.tree.command(name="취침모드끄기", description="취침 모드를 비활성화합니다.")
-async def deactivate_sleep_mode(interaction: discord.Interaction):
-    SLEEP_MODE_ROLE = voice_kick_roles[0]['name']
-    role = discord.utils.get(interaction.guild.roles, name=SLEEP_MODE_ROLE)
-    if role is None:
-        await interaction.response.send_message('역할이 없습니다. 역할생성 명령어를 사용한 후 이용해주세요.', ephemeral=True)
-        return
-    
-    if role:
-        await interaction.user.remove_roles(role)
-        await interaction.response.send_message(f"{interaction.user.mention}, 취침모드가 비활성화되었습니다.", ephemeral=True)
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -720,7 +628,7 @@ async def guest(ctx):
             try:
                 guest_max_age = 30
                 guest_max_uses = 1
-                invite = await voice_channel.create_invite(max_age=guest_max_age*60, max_uses=guest_max_uses, unique=True)
+                invite = await voice_channel.create_invite(max_age=guest_max_age*60, max_uses=guest_max_uses, unique=True, temporary=True)
                 await ctx.author.send(f"{voice_channel} 음성 채널 초대 링크: {invite.url}")
                 await ctx.send(f"{ctx.author.mention}, DM으로 초대 링크를 보냈습니다. 해당 링크는 {guest_max_age}분간 {guest_max_uses}번 사용 가능합니다.")
                 current_time = datetime.now(tz)
@@ -824,7 +732,6 @@ async def on_member_join(member):
         else:
             logging.info(f'{member.display_name}님이 {inviter}님의 일반 초대 코드로 서버에 입장하셨습니다.')
 
-
 #보이스 채널 떠날 때 이벤트(게스트 추방)
 async def ban_guest(member, before, after):
     user_roles = member.roles[1:] #사용자 역할 목록
@@ -875,7 +782,7 @@ async def on_guild_channel_create(channel):
 #===============================================================================================
 # FFmpeg 경로
 # ffmpeg_path = "C:\\ffmpeg\\bin\\ffmpeg.exe"  #윈도우
-ffmpeg_path = 'ffmpeg' #리눅스
+ffmpeg_path = 'ffmpeg' #도커
 
 ffmpeg_source = []
 ffmpeg_options = {
@@ -908,7 +815,7 @@ pitch = [-12,0,12]
 
 headers = {
         'Content-Type': 'application/json',
-        'Authorization': f"Bearer {API_TOKEN}"
+        'Authorization': f"Bearer {typecast_api}"
     }
 
 async def tts_request(character,text):
@@ -1056,20 +963,20 @@ async def help(ctx):
 @bot.event
 async def on_ready():
     await bot.change_presence(activity=discord.Game(name="!명령어"))
-    url = "https://typecast.ai/api/actor"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                global selected_character_name
-                global selected_characeter_data
-                data = await response.json()
-                selected_character_name = data['result'][0]['name']['ko']
-                selected_characeter_data = data['result'][0]['actor_id']
-            else:
-                logging.error("tts 캐릭터 동기화 실패")
-    tts_command = bot.tree.get_command('tts')
-    if tts_command:
-        tts_command.description = f"음성채널에서 tts({selected_character_name})를 읽습니다."
+    # url = "https://typecast.ai/api/actor"
+    # async with aiohttp.ClientSession() as session:
+    #     async with session.get(url, headers=headers) as response:
+    #         if response.status == 200:
+    #             global selected_character_name
+    #             global selected_characeter_data
+    #             data = await response.json()
+    #             selected_character_name = data['result'][0]['name']['ko']
+    #             selected_characeter_data = data['result'][0]['actor_id']
+    #         else:
+    #             logging.error("tts 캐릭터 동기화 실패")
+    # tts_command = bot.tree.get_command('tts')
+    # if tts_command:
+    #     tts_command.description = f"음성채널에서 tts({selected_character_name})를 읽습니다."
     for guild in bot.guilds:
         invites = await guild.invites()
         invite_tracker[guild.id] = {invite.code: invite.uses for invite in invites}
@@ -1077,4 +984,36 @@ async def on_ready():
     logging.info(f'{bot.user} has connected to Discord!')
     bot.loop.create_task(check_sleep_mode())
 
-bot.run(Token)
+class DiscordBot(commands.Bot):
+    def __init__(self) -> None:
+        super().__init__(
+            command_prefix=commands.when_mentioned_or(config["prefix"]),
+            intents=intents,
+            help_command=None,
+        )
+        self.config = config
+
+    async def load_cogs(self) -> None:
+        for file in os.listdir(f"{os.path.realpath(os.path.dirname(__file__))}/cogs"):
+            if file.endswith(".py"):
+                extension = file[:-3]
+                try:
+                    await self.load_extension(f"cogs.{extension}")
+                    print(f"Loaded extension '{extension}'")
+                except Exception as e:
+                    exception = f"{type(e).__name__}: {e}"
+                    print(f"Failed to load extension {extension}\n{exception}")
+
+    async def on_ready(self) -> None:
+        await self.change_presence(activity=discord.Game(name=config["bot_activity"]))
+        synced = await self.tree.sync()
+        print(f"✅ {len(synced)}개의 슬래시 명령어가 동기화됨!")
+
+    async def setup_hook(self) -> None:
+        await self.load_cogs()
+
+
+load_dotenv()
+
+bot = DiscordBot()
+bot.run(discord_token)
