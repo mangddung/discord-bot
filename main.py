@@ -293,20 +293,6 @@ async def on_raw_reaction_add(payload):
             else:
                 role1 = f"{target_role[0].mention} : {', '.join(members_role_1)}\n"
             await channel.send(f"{role1}모집이 완료되었습니다.\n\n!모임 으로 다시 멘션이 가능합니다.\n!모집종료 명령어로 모임 완료시 모집을 종료하세요.")
-    #권한 부여 메시지
-    else:
-        if str(payload.emoji) == '✅':
-            #db에서 access channel, id 검색
-            cursor.execute('''
-            SELECT * FROM channel_access 
-            WHERE access_message_id = ? AND access_channel_id = ?
-            ''', (payload.message_id, payload.channel_id))
-            db = cursor.fetchone()
-            if db:
-                target_channel = bot.get_channel(int(db[4]))
-                member = message.guild.get_member(payload.user_id)
-                await target_channel.set_permissions(member, read_messages=True, send_messages=True)
-                logging.info(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 부여하셨습니다.')
 
 @bot.event
 async def on_raw_reaction_remove(payload):
@@ -325,21 +311,6 @@ async def on_raw_reaction_remove(payload):
         await asyncio.sleep(0.5)
         edit_message = await modify_msg_form(roles, message)
         await message.edit(content=f"{origin_message}{edit_message}")
-    #권한 부여 메시지
-    else:
-        if str(payload.emoji) == '✅':
-            #db에서 access channel, id 검색
-            cursor.execute('''
-            SELECT * FROM channel_access 
-            WHERE access_message_id = ? AND access_channel_id = ?
-            ''', (payload.message_id, payload.channel_id))
-            db = cursor.fetchone()
-            if db:
-                target_channel = bot.get_channel(int(db[4]))
-                member = message.guild.get_member(payload.user_id)
-                await target_channel.set_permissions(member, read_messages=False)
-                await target_channel.set_permissions(member, send_messages=False)
-                logging.info(f'{member.display_name}님이 {target_channel.name}채널 접근 권한을 취소하셨습니다.')
 
 
 #취침모드 기능
@@ -455,83 +426,6 @@ async def check_sleep_mode():
                             await member.send(f"곧 취침 시간입니다. {notice_interval}분 남았습니다.")
                             logging.info(f"{member.nick}({member.id})님에게 {notice_interval}분전 메세지 전송")          
         await asyncio.sleep(60)  # 1분 대기
-
-#================================================================================================
-#텍스트 채널 권한 부여 명령어
-#================================================================================================
-#권한 부여 채널 생성
-@bot.command(name='채널생성')
-@commands.has_permissions(administrator=True)
-async def create_access_channel(ctx, *, channel_name: str):
-    guild = ctx.guild
-    channel = await guild.create_text_channel(channel_name)
-    #비공개 채널 설정
-    await channel.set_permissions(guild.default_role, read_messages=False)
-    await ctx.send(f"채널 '{channel.name}'이 생성되었습니다.")
-
-#권한 부여 메시지 생성
-@bot.command(name='메시지생성')
-@commands.has_permissions(administrator=True)
-async def set_target_channel(ctx, target_channel: str):
-    #대상 채널이 존재하는지 확인
-    target_channel_id = ''
-    for channel in ctx.guild.channels:
-        if channel.name == target_channel:
-            target_channel_id = channel.id
-            break
-    if target_channel_id == '':
-        await ctx.send(f"채널 '{target_channel}'이 존재하지 않습니다.")
-    #존재하면 메시지 생성, 데이터베이스에 저장
-    else:
-        try:
-            message = await ctx.send(f"__**{target_channel}**__ 채널 권한 부여를 위해 아래 이모지를 눌러주세요.")
-            await message.add_reaction("✅")
-            cursor.execute(f'''
-            INSERT INTO channel_access (server_id, access_channel_id, access_message_id, target_channel_id, target_channel_name)
-            VALUES ('{ctx.guild.id}', '{ctx.channel.id}', '{message.id}', '{target_channel_id}', '{target_channel}')
-            ''')
-            conn.commit()
-            #명령어 메시지 삭제
-            await ctx.message.delete()
-            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 생성')
-        except:
-            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 생성 실패')
-            ctx.send(f"채널 '{target_channel}' 권한 부여 메시지 생성 실패")
-
-#권한 부여 메시지 삭제
-@bot.command(name='메시지삭제')
-@commands.has_permissions(administrator=True)
-async def delete_target_channel(ctx, target_channel: str):
-    #대상 채널이 존재하는지 확인
-    target_channel_id = ''
-    for channel in ctx.guild.channels:
-        if channel.name == target_channel:
-            target_channel_id = channel.id
-            break
-    if target_channel_id == '':
-        await ctx.send(f"채널 '{target_channel}'이 존재하지 않습니다.")
-        return
-    #존재하면 메시지 삭제, 데이터베이스에서 삭제
-    cursor.execute('''
-    SELECT * FROM channel_access
-    WHERE access_channel_id = ? AND target_channel_id = ?
-    ''', (ctx.channel.id, target_channel_id))
-    db = cursor.fetchone()
-    if db:
-        try:
-            message = await ctx.channel.fetch_message(db[3])
-            await message.delete()
-            cursor.execute('''
-            DELETE FROM channel_access
-            WHERE access_message_id = ?
-            ''', (db[3],))
-            conn.commit()
-            #명령어 메시지 삭제
-            await ctx.message.delete()
-            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 삭제')
-        except:
-            logging.info(f'{ctx.author.display_name}님이 {target_channel} 채널 권한 부여 메시지 삭제 실패')
-            ctx.send(f"채널 '{target_channel}' 권한 부여 메시지 삭제 실패")
 
 #================================================================================================
 #역할생성 명령어
@@ -951,9 +845,9 @@ async def help(ctx):
             "\n관리자 명령어\n"
             "!역할생성 : 봇에서 사용하는 역할을 생성합니다.\n"
             "!역할삭제 : 봇에서 사용하는 역할을 삭제합니다.\n"
-            "!채널생성 [채널명] : 권한 부여 채널을 생성합니다.\n"
-            "!메시지생성 [대상채널명] : 대상 채널에 권한 부여 메시지를 생성합니다.\n"
-            "!메시지삭제 [대상채널명] : 대상 채널에 권한 부여 메시지를 삭제합니다.\n"
+            "/채널접근 채널생성 [채널명] : 비공개 텍스트 채널을 생성합니다.\n"
+            "/채널접근 메시지생성 [채널명] : 채널 접근 권한 부여 메시지를 생성합니다.\n"
+            "/채널접근 메시지삭제 [채널명] : 채널 접근 권한 부여 메시지를 삭제합니다.\n"
             "/settts : tts를 선택된 캐릭터로 바꿉니다."
         )
 
